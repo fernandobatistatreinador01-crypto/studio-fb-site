@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Studio FB — Gestão</title>
-<!-- TESTE DE ACESSO GITHUB: alteração sem impacto visual ou funcional -->
+<!-- LOGIN PROTEGIDO POR FIREBASE AUTHENTICATION -->
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -213,14 +213,25 @@ tr:hover td { background: #fafafa; }
       <div style="width:40px;height:2px;background:var(--vermelho);margin:16px auto 0"></div>
     </div>
     <div style="background:#1a1a1a;border:1px solid #2a2a2a;border-radius:12px;padding:28px">
-      <div style="font-size:13px;color:#666;text-transform:uppercase;letter-spacing:1px;margin-bottom:20px;font-weight:600">Acesso restrito</div>
+      <div style="font-size:13px;color:#666;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;font-weight:600">Acesso restrito</div>
+      <div style="font-size:11px;color:#444;margin-bottom:20px">Autenticação segura via Firebase</div>
+
+      <div style="margin-bottom:14px">
+        <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:#555;display:block;margin-bottom:6px">E-mail</label>
+        <input id="login-email" type="email" autocomplete="username" placeholder="seu@email.com"
+          style="width:100%;background:#111;border:1px solid #333;color:#eee;border-radius:6px;padding:11px 14px;font-family:'Barlow',sans-serif;font-size:14px;outline:none"
+          onfocus="this.style.borderColor='#D32F2F'" onblur="this.style.borderColor='#333'"
+          onkeydown="if(event.key==='Enter')document.getElementById('login-senha').focus()">
+      </div>
+
       <div style="margin-bottom:24px">
         <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:#555;display:block;margin-bottom:6px">Senha</label>
-        <input id="login-senha" type="password" placeholder="••••••••"
+        <input id="login-senha" type="password" autocomplete="current-password" placeholder="••••••••"
           style="width:100%;background:#111;border:1px solid #333;color:#eee;border-radius:6px;padding:11px 14px;font-family:'Barlow',sans-serif;font-size:14px;outline:none"
           onfocus="this.style.borderColor='#D32F2F'" onblur="this.style.borderColor='#333'"
           onkeydown="if(event.key==='Enter')fazerLogin()">
       </div>
+
       <div id="login-erro" style="display:none;background:rgba(211,47,47,0.15);border:1px solid rgba(211,47,47,0.3);color:#f87171;border-radius:6px;padding:10px 14px;font-size:13px;margin-bottom:16px"></div>
       <button onclick="fazerLogin()" style="width:100%;background:var(--vermelho);color:#fff;border:none;border-radius:6px;padding:13px;font-family:'Bebas Neue',sans-serif;font-size:18px;letter-spacing:1px;cursor:pointer" onmouseover="this.style.background='#B71C1C'" onmouseout="this.style.background='#D32F2F'">ENTRAR</button>
     </div>
@@ -429,6 +440,14 @@ tr:hover td { background: #fafafa; }
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import { getFirestore, collection, doc, getDocs, setDoc, deleteDoc, getDoc, writeBatch }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import {
+  getAuth,
+  signInWithEmailAndPassword,
+  onAuthStateChanged,
+  signOut,
+  setPersistence,
+  browserSessionPersistence
+} from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyDc8muhoCO9wOTRAXG3uYXM35-UwUjZLbQ",
@@ -438,90 +457,118 @@ const firebaseConfig = {
   messagingSenderId: "808935402407",
   appId: "1:808935402407:web:1aae43a85d855728ed6482"
 };
-const app = initializeApp(firebaseConfig);
-const db  = getFirestore(app);
+const app  = initializeApp(firebaseConfig);
+const db   = getFirestore(app);
+const auth = getAuth(app);
 
 // ═══════════════════════════════════════════════════
-// LOGIN LOCAL — senha não fica em texto claro no HTML
-// Observação: isso dificulta inspeção simples, mas não substitui Firebase Auth.
+// FIREBASE AUTHENTICATION — e-mail + senha
+// A autenticação real é validada pelo Firebase.
+// A proteção dos dados deve ser complementada pelas Firestore Security Rules.
 // ═══════════════════════════════════════════════════
-const ACCESS_LOCK = Object.freeze({
-  i: 210000,
-  s: ['cA==','nIIN','SMg4','SI+8','uLZ+','xNyO'],
-  h: ['/xY=','L+t8','cu66','EAfX','jFY+','ppSD','6UK1','8x++','felF','9zXT','BfER']
-});
 const loginScreen = document.getElementById('login-screen');
 const appMain     = document.querySelector('.main');
 const appSidebar  = document.getElementById('sidebar');
 
-function b64Bytes(str) {
-  const bin = atob(str);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
-}
-function sameBytes(a, b) {
-  if (!a || !b || a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
-  return diff === 0;
-}
-async function checkLocalAccess(input) {
-  if (!input || typeof crypto === 'undefined' || !crypto.subtle) return false;
-  const enc = new TextEncoder();
-  const key = await crypto.subtle.importKey('raw', enc.encode(input), 'PBKDF2', false, ['deriveBits']);
-  const bits = await crypto.subtle.deriveBits(
-    { name: 'PBKDF2', salt: b64Bytes(ACCESS_LOCK.s.slice().reverse().join('')), iterations: ACCESS_LOCK.i, hash: 'SHA-256' },
-    key,
-    256
-  );
-  return sameBytes(new Uint8Array(bits), b64Bytes(ACCESS_LOCK.h.slice().reverse().join('')));
+function mostrarLogin() {
+  loginScreen.style.display = 'flex';
+  appMain.style.display = 'none';
+  appSidebar.style.display = 'none';
+
+  const email = document.getElementById('login-email');
+  const senha = document.getElementById('login-senha');
+  const erro  = document.getElementById('login-erro');
+
+  if (erro) erro.style.display = 'none';
+  if (senha) senha.value = '';
+
+  setTimeout(() => {
+    if (email && !email.value) email.focus();
+    else if (senha) senha.focus();
+  }, 100);
 }
 
-function verificarSessao() {
-  if (sessionStorage.getItem('sfb_auth') === '1') mostrarApp();
-  else {
-    loginScreen.style.display = 'flex';
-    appMain.style.display = 'none';
-    appSidebar.style.display = 'none';
-    setTimeout(() => document.getElementById('login-senha').focus(), 100);
-  }
-}
-function mostrarApp() {
+function mostrarApp(user) {
   loginScreen.style.display = 'none';
   appMain.style.display = '';
   appSidebar.style.display = '';
+
+  const emailSeguro = user?.email || 'Usuário autenticado';
   document.getElementById('sidebar-footer').innerHTML =
-    `<div style="font-size:11px;color:#444;margin-bottom:8px">Studio FB © 2026</div>
+    `<div style="font-size:11px;color:#444;margin-bottom:5px">Studio FB © 2026</div>
+     <div style="font-size:10px;color:#555;margin-bottom:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${emailSeguro}">${emailSeguro}</div>
      <button onclick="fazerLogout()" style="background:none;border:1px solid #333;color:#666;border-radius:4px;padding:5px 10px;font-size:11px;cursor:pointer;width:100%;font-family:'Barlow',sans-serif" onmouseover="this.style.borderColor='#D32F2F';this.style.color='#D32F2F'" onmouseout="this.style.borderColor='#333';this.style.color='#666'">Sair</button>`;
+
   if (!alunos.length) init();
 }
+
+function mensagemErroAuth(code) {
+  const mensagens = {
+    'auth/invalid-email': 'Informe um e-mail válido.',
+    'auth/invalid-credential': 'E-mail ou senha incorretos.',
+    'auth/user-not-found': 'E-mail ou senha incorretos.',
+    'auth/wrong-password': 'E-mail ou senha incorretos.',
+    'auth/user-disabled': 'Este acesso foi desativado.',
+    'auth/too-many-requests': 'Muitas tentativas. Aguarde alguns minutos e tente novamente.',
+    'auth/network-request-failed': 'Falha de conexão. Verifique a internet e tente novamente.',
+    'auth/operation-not-allowed': 'Login por e-mail e senha ainda não foi habilitado no Firebase.'
+  };
+  return mensagens[code] || 'Não foi possível entrar. Tente novamente.';
+}
+
 window.fazerLogin = async function() {
-  const campo = document.getElementById('login-senha');
+  const emailCampo = document.getElementById('login-email');
+  const senhaCampo = document.getElementById('login-senha');
   const btn = document.querySelector('#login-screen button[onclick="fazerLogin()"]');
-  const s = campo.value;
-  const e = document.getElementById('login-erro');
-  e.style.display = 'none';
-  if (btn) { btn.disabled = true; btn.textContent = 'VERIFICANDO...'; btn.style.opacity = '0.75'; }
+  const erro = document.getElementById('login-erro');
+
+  const email = emailCampo?.value.trim() || '';
+  const senha = senhaCampo?.value || '';
+
+  erro.style.display = 'none';
+
+  if (!email || !senha) {
+    erro.textContent = 'Informe e-mail e senha.';
+    erro.style.display = 'block';
+    (!email ? emailCampo : senhaCampo)?.focus();
+    return;
+  }
+
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'ENTRANDO...';
+    btn.style.opacity = '0.75';
+  }
+
   try {
-    if (await checkLocalAccess(s)) {
-      sessionStorage.setItem('sfb_auth','1');
-      mostrarApp();
-    } else {
-      e.textContent='Senha incorreta.';
-      e.style.display='block';
-      campo.value='';
-      campo.focus();
-    }
+    // Mantém a sessão apenas durante esta sessão do navegador,
+    // comportamento semelhante ao sessionStorage usado anteriormente.
+    await setPersistence(auth, browserSessionPersistence);
+    await signInWithEmailAndPassword(auth, email, senha);
+    // A abertura do sistema é feita pelo onAuthStateChanged no final do arquivo.
   } catch (err) {
-    console.error(err);
-    e.textContent='Não foi possível validar o acesso neste navegador.';
-    e.style.display='block';
+    console.error('Falha no Firebase Auth:', err);
+    erro.textContent = mensagemErroAuth(err?.code);
+    erro.style.display = 'block';
+    senhaCampo.value = '';
+    senhaCampo.focus();
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = 'ENTRAR'; btn.style.opacity = '1'; }
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'ENTRAR';
+      btn.style.opacity = '1';
+    }
   }
 };
-window.fazerLogout = function() { sessionStorage.removeItem('sfb_auth'); location.reload(); };
+
+window.fazerLogout = async function() {
+  try {
+    await signOut(auth);
+  } catch (err) {
+    console.error('Falha ao sair:', err);
+    alert('Não foi possível encerrar a sessão. Tente novamente.');
+  }
+};
 
 // ═══════════════════════════════════════════════════
 // CONSTANTES
@@ -7775,7 +7822,10 @@ async function init(){
 }
 
 
-verificarSessao();
+onAuthStateChanged(auth, (user) => {
+  if (user) mostrarApp(user);
+  else mostrarLogin();
+});
 
 // ═══════════════════════════════════════════════════
 // V29 — Ponto de partida NF em julho/2026 + botão de cancelamento visível
