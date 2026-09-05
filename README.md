@@ -67,3 +67,9 @@ A despesa permanece na competência original, mas só sai do caixa depois que Fe
 - Removidos handlers JavaScript inline do formulário de autenticação.
 - Enter/submissão é tratado por `addEventListener`.
 - Remove o aviso do Chrome de senha fora de formulário.
+
+## Correção V32.2
+
+- Corrigida incompatibilidade de sintaxe no cálculo de cancelamento causada pela mistura de `??` e `||` sem agrupamento explícito.
+- O `app.js` foi validado integralmente após remover apenas os imports ESM para fins de análise sintática.
+- A função de cálculo de cancelamento também foi validada isoladamente.

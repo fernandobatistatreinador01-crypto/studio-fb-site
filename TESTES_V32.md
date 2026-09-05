@@ -31,3 +31,9 @@ Como o banco e a autenticação são remotos, faça um teste curto no ambiente r
 5. Confirmar um cancelamento de teste — contrato deve ficar cancelado, sem lançamento financeiro automático.
 6. Registrar multa/acordo/reembolso e conferir os destinos.
 7. Registrar uma despesa de competência e dar baixa em outro mês; conferir DRE x Caixa.
+
+## V32.2 — sintaxe
+
+- `app.js` completo: OK em análise sintática.
+- Função `calcularCancelamentoV32`: OK em análise sintática.
+- Expressões `valorTotal` e `valorVista` agora agrupam `??` antes do fallback com `||`.

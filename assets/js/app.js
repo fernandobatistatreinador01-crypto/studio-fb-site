@@ -8273,7 +8273,7 @@ window.salvarAluno=salvarAluno;
 // ──────────────────────────────────────────────────
 function calcularCancelamentoV32(c,{dataCancelamento,valorTotal,valorVista,extrasTotal}={}){
   const data=dataCancelamento||new Date().toISOString().split('T')[0],mesesPlano=Math.max(1,mesesContrato(c)),mesesUsados=mesesUsadosPorDataCancelamentoV31(c,data);
-  const total=Number(valorTotal??valorContrato(c)||0),vista=Number(valorVista??valorVistaReferenciaV26(c)||0),pago=Number(totalPagoContrato(c.id)||0),extras=Number(extrasTotal||0),pct=percentualMultaReembolsoV26(c.plano,mesesUsados),mensal=mesesPlano?total/mesesPlano:total;
+  const total=Number((valorTotal ?? valorContrato(c)) || 0),vista=Number((valorVista ?? valorVistaReferenciaV26(c)) || 0),pago=Number(totalPagoContrato(c.id)||0),extras=Number(extrasTotal||0),pct=percentualMultaReembolsoV26(c.plano,mesesUsados),mensal=mesesPlano?total/mesesPlano:total;
   const consumido=c.plano==='mensal'?total:mensal*mesesUsados,multa=c.plano==='mensal'?0:total*pct/100,custo=consumido+multa+extras,reembolsoTeorico=c.plano==='mensal'?0:Math.max(0,vista-custo),saldo=pago-custo;
   let tipo='sem_acerto',reembolso=0,receber=0;
   if(saldo < -0.005){tipo='receber';receber=Math.abs(saldo);} else if(saldo>0.005&&reembolsoTeorico>0.005){tipo='reembolso';reembolso=Math.min(reembolsoTeorico,saldo);}
