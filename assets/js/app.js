@@ -7999,3 +7999,441 @@ abrirPerfilAluno = function(id){
 };
 window.abrirPerfilAluno = abrirPerfilAluno;
 window.openModalAluno = openModalAluno;
+
+// ═══════════════════════════════════════════════════
+// V32 — CANCELAMENTO DOCUMENTAL + AUDITORIA FINANCEIRA
+// ═══════════════════════════════════════════════════
+// Regras operacionais validadas:
+// • Competência de contrato vem dos ciclos contratuais, nunca da data do pagamento.
+// • Caixa usa a data real de entrada/saída.
+// • Cartão entra integralmente no caixa na data em que o Studio recebe o líquido.
+// • Despesas permanecem na competência original e só afetam o caixa após baixa explícita.
+// • Cancelamento confirmado registra uma fotografia da apuração, mas NÃO lança DRE/caixa.
+// • Multa, acordo e reembolso só produzem efeito quando Fernando registra a movimentação.
+
+function arredV32(v){ return Math.round((Number(v||0)+Number.EPSILON)*100)/100; }
+function dataNoMesV32(data, mes, ano){
+  const d=dataLocal(data);
+  return !!d && d.getFullYear()===Number(ano) && d.getMonth()===Number(mes);
+}
+function ymV32(data){
+  const d=dataLocal(data); if(!d) return '';
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+}
+function naturezaMovAlunoV32(p){
+  if(!p) return 'contrato';
+  if(p.tipo==='aula_extra') return 'aula_extra';
+  return p.natureza || 'contrato';
+}
+function naturezaQuitaContratoV32(p){
+  return !['aula_extra','multa_cancelamento','acordo_cancelamento','reembolso_cancelamento'].includes(naturezaMovAlunoV32(p));
+}
+function sinalCaixaAlunoV32(p){ return naturezaMovAlunoV32(p)==='reembolso_cancelamento' ? -1 : 1; }
+function valorCaixaAlunoV32(p){ return sinalCaixaAlunoV32(p)*Number(p?.valor||0); }
+function labelNaturezaV32(n){
+  n=typeof n==='string'?n:naturezaMovAlunoV32(n);
+  return ({contrato:'Pagamento do contrato',aula_extra:'Aula extra',multa_cancelamento:'Multa rescisória',acordo_cancelamento:'Pagamento do acordo',reembolso_cancelamento:'Reembolso ao aluno'})[n]||'Movimentação';
+}
+function badgeNaturezaV32(p){
+  const n=naturezaMovAlunoV32(p);
+  const d={
+    contrato:['Contrato','var(--azul)','var(--azul-light)'],
+    aula_extra:['Aula extra','var(--roxo)','var(--roxo-light)'],
+    multa_cancelamento:['Multa','var(--verde)','var(--verde-light)'],
+    acordo_cancelamento:['Acordo','#0369a1','#e0f2fe'],
+    reembolso_cancelamento:['Reembolso','var(--vermelho)','var(--vermelho-light)']
+  }[n]||['Movimentação','#6b7280','#f3f4f6'];
+  return `<span class="badge" style="color:${d[1]};background:${d[2]};margin-left:6px">${d[0]}</span>`;
+}
+function hintNaturezaV32(n){
+  return ({
+    contrato:'Caixa: entrada na data recebida. DRE: não muda; a competência já vem dos ciclos do contrato.',
+    multa_cancelamento:'Caixa: entrada na data recebida. DRE: receita de multa no mesmo mês do recebimento.',
+    acordo_cancelamento:'Caixa: entrada na data recebida. DRE: não cria nova receita.',
+    reembolso_cancelamento:'Caixa: saída na data paga. DRE: não é despesa operacional.'
+  })[n]||'';
+}
+
+// Pagamentos que quitam o preço original do contrato.
+pagamentosDoContrato = function(contratoId){
+  return pagamentos
+    .filter(p=>String(p.contratoId)===String(contratoId) && p.status!=='excluido' && naturezaQuitaContratoV32(p))
+    .sort((a,b)=>(dataLocal(a.data)?.getTime()||0)-(dataLocal(b.data)?.getTime()||0));
+};
+pagamentosDoAluno = function(alunoId){
+  return pagamentos
+    .filter(p=>String(p.alunoId)===String(alunoId) && p.status!=='excluido')
+    .sort((a,b)=>(dataLocal(b.data)?.getTime()||0)-(dataLocal(a.data)?.getTime()||0));
+};
+totalPagoContrato = function(contratoId){ return pagamentosDoContrato(contratoId).reduce((s,p)=>s+Number(p.valor||0),0); };
+saldoContrato = function(c){ return Math.max(0,valorContrato(c)-totalPagoContrato(c?.id)); };
+
+// Contrato cancelado não volta a ser tratado como vigente.
+contratoVigenteAluno = function(alunoId){
+  const lista=contratosDoAluno(alunoId).filter(c=>c.status!=='cancelado');
+  if(!lista.length) return null;
+  const hoje=new Date();
+  const vigente=lista.find(c=>{const i=dataLocal(c.inicio),v=dataLocal(vencEfetivoContratoV26(c));return i&&v&&i<=hoje&&v>=hoje;});
+  if(vigente) return vigente;
+  const futuro=lista.find(c=>dataLocal(c.inicio)>hoje);
+  return futuro || lista[lista.length-1] || null;
+};
+statusContratoHistorico = function(c){
+  if(c?.status==='cancelado') return {contrato:'cancelado',label:'Cancelado',cor:'var(--vermelho)',icon:'⛔'};
+  if(!c) return {contrato:'nao_renovou',label:'Sem contrato',cor:'#6b7280',icon:'📋'};
+  const hoje=new Date(),ini=dataLocal(c.inicio),venc=dataLocal(vencEfetivoContratoV26(c));
+  const pago=totalPagoContrato(c.id),total=valorContrato(c),saldo=Math.max(0,total-pago);
+  if(ini&&ini>hoje) return {contrato:'futuro',label:'Contrato futuro',cor:'var(--azul)',icon:'⏳'};
+  if(venc&&venc<hoje) return saldo>0?{contrato:'inadimplente',label:'Vencido em aberto',cor:'var(--vermelho)',icon:'🔴'}:{contrato:'quitado',label:'Quitado',cor:'var(--verde)',icon:'✅'};
+  if(pago>=total&&total>0) return {contrato:'ativo',label:'Vigente e quitado',cor:'var(--verde)',icon:'✅'};
+  if(pago>0) return {contrato:'aguardando',label:'Vigente — parcial',cor:'var(--amarelo)',icon:'◐'};
+  return {contrato:'aguardando',label:'Vigente — em aberto',cor:'var(--azul)',icon:'⏳'};
+};
+
+// Datas financeiras sempre interpretadas como data local.
+aulasExtrasMes = function(mes,ano){ return pagamentos.filter(p=>isAulaExtraPagamento(p)&&dataNoMesV32(p.data,mes,ano)); };
+totalAulasExtrasMes = function(mes,ano){ return aulasExtrasMes(mes,ano).reduce((s,p)=>s+Number(p.valor||0),0); };
+pagamentosCartaoMes = function(mes,ano){ return pagamentos.filter(p=>p.status!=='excluido'&&p.forma==='Cartão'&&dataNoMesV32(p.data,mes,ano)); };
+totalTaxaCartaoMes = function(mes,ano){ return pagamentosCartaoMes(mes,ano).reduce((s,p)=>s+valorTaxaCartao(p),0); };
+totalBrutoCartaoMes = function(mes,ano){ return pagamentosCartaoMes(mes,ano).reduce((s,p)=>s+num(p.valorBruto||p.valor),0); };
+totalLiquidoCartaoMes = function(mes,ano){ return pagamentosCartaoMes(mes,ano).reduce((s,p)=>s+num(p.valor),0); };
+function movimentosAlunoCaixaMesV32(mes,ano){
+  return pagamentos.filter(p=>p.status!=='excluido'&&p.data&&dataNoMesV32(p.data,mes,ano))
+    .sort((a,b)=>(dataLocal(b.data)?.getTime()||0)-(dataLocal(a.data)?.getTime()||0));
+}
+receitaCaixaMes = function(mes,ano){ return movimentosAlunoCaixaMesV32(mes,ano).reduce((s,p)=>s+valorCaixaAlunoV32(p),0); };
+function entradasAlunoV32(mes,ano){ return movimentosAlunoCaixaMesV32(mes,ano).reduce((s,p)=>s+Math.max(0,valorCaixaAlunoV32(p)),0); }
+function reembolsosAlunoV32(mes,ano){ return movimentosAlunoCaixaMesV32(mes,ano).reduce((s,p)=>s+Math.max(0,-valorCaixaAlunoV32(p)),0); }
+function multasMesV32(mes,ano){ return movimentosAlunoCaixaMesV32(mes,ano).filter(p=>naturezaMovAlunoV32(p)==='multa_cancelamento'); }
+function receitaMultasV32(mes,ano){ return multasMesV32(mes,ano).reduce((s,p)=>s+Number(p.valor||0),0); }
+
+// Cancelamento não gera DRE nem liquidação por si só.
+receitasExtrasCancelamentoMesV26 = function(){ return []; };
+totalReceitasExtrasCancelamentoMesV26 = function(){ return 0; };
+totalLiquidadoCancelamentoV26 = function(){ return 0; };
+
+// DRE: ciclos do contrato + aulas extras + multa registrada manualmente.
+receitaMesEsp = function(mes,ano){
+  const contratosValor=contratos.filter(c=>contratoContaCompetenciaMes(c,mes,ano))
+    .reduce((s,c)=>s+Number(valorCompetenciaContratoMesV28(c,mes,ano)||0),0);
+  return contratosValor + totalAulasExtrasMes(mes,ano) + receitaMultasV32(mes,ano);
+};
+receitaMensal = function(){ return receitaMesEsp(MES_ATUAL,ANO_ATUAL); };
+receitaDoMesSelecionada = function(mes,ano){ return financeiroModo==='caixa'?receitaCaixaMes(mes,ano):receitaMesEsp(mes,ano); };
+
+// ──────────────────────────────────────────────────
+// DESPESAS: competência ≠ caixa
+// ──────────────────────────────────────────────────
+function hashV32(s){ let h=2166136261; for(const ch of String(s||'')){h^=ch.charCodeAt(0);h=Math.imul(h,16777619);} return (h>>>0).toString(36); }
+function refDespV32(d,cat,mes,ano,idx){
+  const ym=`${ano}_${String(mes).padStart(2,'0')}`;
+  if(d?.__pessoalV20&&d?.funcionarioId) return `pessoal_${d.funcionarioId}_${ym}`;
+  if(d?.progId) return `prog_${d.progId}_${ym}`;
+  if(d?.id) return `item_${d.id}_${ym}`;
+  return `desp_${ym}_${cat}_${idx}_${hashV32(d?.desc||'')}`;
+}
+function movDespV32(ref){ return (caixaMovs||[]).find(m=>m.status!=='excluido'&&m.tipo==='pagamento_despesa_operacional'&&String(m.despesaRef)===String(ref))||null; }
+function movDespesasMesV32(mes,ano){
+  return (caixaMovs||[]).filter(m=>m.status!=='excluido'&&m.tipo==='pagamento_despesa_operacional'&&dataNoMesV32(m.data,mes,ano))
+    .sort((a,b)=>(dataLocal(b.data)?.getTime()||0)-(dataLocal(a.data)?.getTime()||0));
+}
+function totalDespesaCaixaV32(mes,ano){ return movDespesasMesV32(mes,ano).reduce((s,m)=>s+Number(m.valor||0),0); }
+function catLabelV32(cat){ return ({operacional:'Colaboradores',despesa_op:'Despesas Operacionais',administrativo:'Administrativo',marketing:'Marketing',impostos:'Impostos',pessoal:'Pessoal e Encargos'})[cat]||cat; }
+async function itensDespV32(mes,ano){
+  const cats=await loadDespesas(mes,ano),itens=[];
+  Object.entries(cats||{}).forEach(([cat,lista])=>(lista||[]).forEach((d,idx)=>{
+    if(Number(d.valor||0)<=0) return;
+    itens.push({cat,idx,d,ref:refDespV32(d,cat,mes,ano,idx),descricao:d.desc||'Despesa',valor:Number(d.valor||0),competencia:`${ano}-${String(mes+1).padStart(2,'0')}`});
+  }));
+  return itens;
+}
+window.abrirBaixaDespesaV32 = async function(ref,descricao,valorPadrao,competencia,cat=''){
+  await carregarMovCaixa();
+  const mov=movDespV32(ref),hoje=new Date().toISOString().split('T')[0];
+  const html=`<div class="overlay open" id="modal-baixa-v32" style="z-index:560"><div class="modal" style="max-width:490px"><div class="modal-header"><div><div class="modal-title">${mov?'Editar':'Registrar'} pagamento da despesa</div><div style="font-size:12px;color:var(--texto-muted)">Competência ${esc(competencia)}. A data abaixo determina o caixa.</div></div><button class="modal-close" onclick="document.getElementById('modal-baixa-v32').remove()">✕</button></div><div class="modal-body"><div style="padding:10px 12px;background:#f9fafb;border:1px solid var(--borda);border-radius:8px;margin-bottom:14px"><strong>${esc(descricao)}</strong><div style="font-size:12px;color:var(--texto-muted)">Valor na competência: ${fmtValor(valorPadrao)}</div></div><div class="form-grid" style="grid-template-columns:1fr"><div class="form-group"><label class="form-label">Data em que saiu do caixa</label><input class="form-input" type="date" id="bd-data" value="${esc(mov?.data||hoje)}"></div><div class="form-group"><label class="form-label">Valor efetivamente pago (R$)</label><input class="form-input" type="number" step="0.01" id="bd-valor" value="${Number(mov?.valor??valorPadrao).toFixed(2)}"></div><div class="form-group"><label class="form-label">Conta / forma</label><input class="form-input" id="bd-conta" value="${esc(mov?.conta||'')}" placeholder="Ex.: PIX / Banco do Brasil"></div><div class="form-group"><label class="form-label">Observação</label><input class="form-input" id="bd-obs" value="${esc(mov?.observacao||'')}"></div></div></div><div class="modal-footer">${mov?`<button class="btn btn-danger" onclick="removerBaixaDespesaV32('${esc(ref)}')">Desfazer baixa</button>`:''}<div style="flex:1"></div><button class="btn btn-ghost" onclick="document.getElementById('modal-baixa-v32').remove()">Cancelar</button><button class="btn btn-primary" onclick='salvarBaixaDespesaV32(${JSON.stringify(ref)},${Number(valorPadrao)},${JSON.stringify(competencia)},${JSON.stringify(descricao)},${JSON.stringify(cat)})'>Salvar</button></div></div></div>`;
+  document.body.insertAdjacentHTML('beforeend',html);
+};
+window.salvarBaixaDespesaV32 = async function(ref,valorPadrao,competencia,descricao,cat){
+  const data=document.getElementById('bd-data')?.value,valor=Number(document.getElementById('bd-valor')?.value||0);
+  if(!data||valor<=0){alert('Informe data e valor pago.');return;}
+  const existente=movDespV32(ref),id=existente?.id||`cx_desp_${hashV32(ref)}`;
+  const mov={...existente,id,tipo:'pagamento_despesa_operacional',despesaRef:ref,data,valor:arredV32(valor),competencia,descricao,cat,conta:document.getElementById('bd-conta')?.value.trim()||'',observacao:document.getElementById('bd-obs')?.value.trim()||'',status:'ativo',criadoEm:existente?.criadoEm||new Date().toISOString(),atualizadoEm:new Date().toISOString(),ts:existente?.ts||Date.now()};
+  await salvarMovCaixa(mov);
+  document.getElementById('modal-baixa-v32')?.remove();
+  toast('Pagamento da despesa registrado no caixa ✓');
+  if(viewAtual==='despesas') renderDespesasView(); else if(viewAtual==='financeiro') renderFinanceiroView(); else if(viewAtual==='caixa') renderCaixaView();
+};
+window.removerBaixaDespesaV32 = async function(ref){
+  const mov=movDespV32(ref); if(!mov||!confirm('Desfazer a baixa de caixa? A despesa continuará na competência.'))return;
+  await salvarMovCaixa({...mov,status:'excluido',excluidoEm:new Date().toISOString()});
+  document.getElementById('modal-baixa-v32')?.remove(); toast('Baixa removida. A competência foi preservada.'); renderDespesasView();
+};
+async function inserirConciliacaoV32(){
+  const cont=document.getElementById('content'); if(!cont||document.getElementById('conciliacao-v32'))return;
+  await carregarMovCaixa();
+  const itens=await itensDespV32(despMes,despAno);
+  const comp=itens.reduce((s,i)=>s+i.valor,0),baixado=itens.reduce((s,i)=>s+Number(movDespV32(i.ref)?.valor||0),0),qtd=itens.filter(i=>movDespV32(i.ref)).length;
+  const rows=itens.map(i=>{const m=movDespV32(i.ref);return `<tr><td><strong>${esc(i.descricao)}</strong><div style="font-size:11px;color:var(--texto-muted)">${esc(catLabelV32(i.cat))}</div></td><td style="font-weight:700">${fmtValor(i.valor)}</td><td>${m?`<span class="badge badge-pago">Pago</span><div style="font-size:11px;color:var(--texto-muted);margin-top:3px">${fmtData(m.data)} · ${fmtValor(m.valor)}</div>`:`<span class="badge badge-pendente">Sem baixa</span>`}</td><td style="text-align:right"><button class="btn ${m?'btn-ghost':'btn-success'} btn-sm" onclick='abrirBaixaDespesaV32(${JSON.stringify(i.ref)},${JSON.stringify(i.descricao)},${i.valor},${JSON.stringify(i.competencia)},${JSON.stringify(i.cat)})'>${m?'✏️ Editar baixa':'💵 Registrar pagamento'}</button></td></tr>`;}).join('');
+  cont.insertAdjacentHTML('beforeend',`<div class="section-box" id="conciliacao-v32" style="margin-top:20px"><div class="section-header"><div><div class="section-title">Conciliação de Caixa das Despesas</div><div style="font-size:12px;color:var(--texto-muted)">A despesa continua na competência de ${MESES_NOMES[despMes]} ${despAno}. Só entra no caixa na data de pagamento registrada.</div></div><div style="font-size:12px;text-align:right"><strong>${qtd}/${itens.length}</strong> baixadas<br><span style="color:var(--texto-muted)">Comp. ${fmtValor(comp)} · baixado ${fmtValor(baixado)}</span></div></div><div class="table-wrap"><table><thead><tr><th>Despesa</th><th>Competência</th><th>Caixa</th><th></th></tr></thead><tbody>${rows||'<tr><td colspan="4"><div class="empty">Nenhuma despesa com valor neste mês.</div></td></tr>'}</tbody></table></div></div>`);
+}
+const renderDespesasBaseV32 = renderDespesasView;
+renderDespesasView = async function(){ await renderDespesasBaseV32(); await inserirConciliacaoV32(); };
+window.renderDespesasView=renderDespesasView;
+
+// Resultado de caixa usa despesas efetivamente pagas.
+const resumoCaixaBaseV32 = resumoCaixaMes;
+resumoCaixaMes = async function(mes=cxMes,ano=cxAno){
+  await carregarMovCaixa();
+  const r=await resumoCaixaBaseV32(mes,ano),despCaixa=totalDespesaCaixaV32(mes,ano);
+  return {...r,despCaixa,resCx:Number(r.recCx||0)-despCaixa};
+};
+window.resumoCaixaMes=resumoCaixaMes;
+const resumoCaixaLeveBaseV32 = resumoCaixaMesLeve;
+resumoCaixaMesLeve = async function(mes,ano){
+  await carregarMovCaixa();
+  const r=await resumoCaixaLeveBaseV32(mes,ano),despCaixa=totalDespesaCaixaV32(mes,ano);
+  return {...r,despCaixa,resCx:Number(r.recCx||0)-despCaixa};
+};
+
+// ──────────────────────────────────────────────────
+// PAGAMENTOS / MOVIMENTAÇÕES NO PERFIL DO ALUNO
+// ──────────────────────────────────────────────────
+function somaNaturezaContratoV32(c,n){ return pagamentos.filter(p=>p.status!=='excluido'&&String(p.contratoId)===String(c?.id)&&naturezaMovAlunoV32(p)===n).reduce((s,p)=>s+Number(p.valor||0),0); }
+function sugestaoValorMovV32(c,n){
+  if(n==='contrato') return saldoContrato(c);
+  const x=c?.cancelamento; if(!x)return 0;
+  if(n==='multa_cancelamento') return Math.max(0,Number(x.multaRetida||0)-somaNaturezaContratoV32(c,n));
+  if(n==='acordo_cancelamento') return Math.max(0,Number(x.valorAReceber||x.valorAcertoAcordado||0)-somaNaturezaContratoV32(c,n));
+  if(n==='reembolso_cancelamento') return Math.max(0,Number(x.valorReembolsado||x.valorAcertoAcordado||0)-somaNaturezaContratoV32(c,n));
+  return 0;
+}
+window.atualizarNaturezaPagamentoV32 = function(forcar=true){
+  const n=document.getElementById('pg-natureza')?.value||'contrato',cid=document.getElementById('pg-contrato-id')?.value,c=contratos.find(x=>String(x.id)===String(cid));
+  const hint=document.getElementById('pg-natureza-hint'); if(hint)hint.textContent=hintNaturezaV32(n);
+  const desc=document.getElementById('pg-desc'); if(desc&&desc.dataset.editando!=='1')desc.value=labelNaturezaV32(n);
+  if(forcar&&c){const v=sugestaoValorMovV32(c,n),el=document.getElementById('pg-valor');if(el&&v>0)el.value=v.toFixed(2);}
+  const forma=document.getElementById('pg-forma'); if(n==='reembolso_cancelamento'&&forma?.value==='Cartão')forma.value='PIX';
+  togglePgCartao();
+};
+function abrirModalPagamentoV32(alunoId,contratoId=null,pagamentoId=null){
+  const a=alunos.find(x=>String(x.id)===String(alunoId)); if(!a)return;
+  const lista=contratosDoAluno(alunoId),c=contratoId?contratos.find(x=>String(x.id)===String(contratoId)):(contratoVigenteAluno(alunoId)||lista[lista.length-1]);
+  if(!c){alert('Cadastre um contrato antes de lançar movimentação.');return;}
+  const p=pagamentoId?pagamentos.find(x=>String(x.id)===String(pagamentoId)):null,n0=naturezaMovAlunoV32(p),x=c.cancelamento;
+  const op=[['contrato','Pagamento do contrato / mensalidade']];
+  if(x){op.push(['multa_cancelamento','Multa rescisória']);if(Number(x.valorAReceber||0)>0)op.push(['acordo_cancelamento','Pagamento do acordo / saldo']);if(Number(x.valorReembolsado||0)>0)op.push(['reembolso_cancelamento','Reembolso ao aluno']);}
+  if(!op.some(o=>o[0]===n0)&&n0!=='aula_extra')op.push([n0,labelNaturezaV32(n0)]);
+  const valor=p?.valor??sugestaoValorMovV32(c,n0),forma=p?.forma||c.pgto||'PIX',bruto=p?.valorBruto??valor;
+  const html=`<div style="position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:570;display:flex;align-items:center;justify-content:center;padding:16px" id="modal-pagamento-overlay"><div style="background:#fff;border-radius:12px;padding:24px;width:100%;max-width:540px;box-shadow:var(--shadow-lg);max-height:92vh;overflow-y:auto"><div style="font-family:'Bebas Neue',sans-serif;font-size:22px;margin-bottom:4px">${p?'Editar movimentação':'Registrar movimentação'}</div><div style="font-size:12px;color:var(--texto-muted);margin-bottom:16px"><strong>${esc(a.nome)}</strong> · ${esc(nomeContrato(c))}</div><input type="hidden" id="pg-contrato-id" value="${esc(c.id)}"><div class="form-grid" style="grid-template-columns:1fr"><div class="form-group"><label class="form-label">O que este lançamento representa?</label><select class="form-select" id="pg-natureza" onchange="atualizarNaturezaPagamentoV32(true)">${op.map(([v,l])=>`<option value="${v}" ${v===n0?'selected':''}>${l}</option>`).join('')}</select><div class="form-hint" id="pg-natureza-hint">${esc(hintNaturezaV32(n0))}</div></div><div class="form-group"><label class="form-label">Data real da movimentação</label><input class="form-input" type="date" id="pg-data" value="${esc(p?.data||new Date().toISOString().split('T')[0])}"><div class="form-hint">Esta data determina o mês do caixa.</div></div><div class="form-group"><label class="form-label">Forma</label><select class="form-select" id="pg-forma" onchange="togglePgCartao()"><option value="PIX" ${forma==='PIX'?'selected':''}>PIX</option><option value="Cartão" ${forma==='Cartão'?'selected':''}>Cartão</option><option value="Dinheiro" ${forma==='Dinheiro'?'selected':''}>Dinheiro</option></select></div><div class="form-group" id="pg-bruto-group" style="display:none"><label class="form-label">Valor cobrado no cartão (bruto)</label><input class="form-input" type="number" id="pg-valor-bruto" step="0.01" value="${Number(bruto||0)||''}" oninput="calcPgCartao()"></div><div class="form-group"><label class="form-label" id="pg-valor-label">Valor efetivo (R$)</label><input class="form-input" type="number" id="pg-valor" step="0.01" value="${Number(valor||0).toFixed(2)}" oninput="calcPgCartao()"></div><div class="form-group" id="pg-cartao-resumo-group" style="display:none"><label class="form-label">Resumo do cartão</label><div class="form-input" id="pg-cartao-hint" style="background:#fff7ed;color:#92400e;min-height:40px;display:flex;align-items:center"></div></div><div class="form-group" id="pg-parcelas-group" style="display:none"><label class="form-label">Parcelamento do cliente</label><select class="form-select" id="pg-parcelas"><option value="">Não informado</option>${Array.from({length:12},(_,i)=>i+1).map(n=>`<option value="${n}" ${Number(p?.parcelas||c.parcelas)===n?'selected':''}>${n}x</option>`).join('')}</select><div class="form-hint">Mesmo parcelado, o líquido integral entra no caixa nesta data.</div></div><div class="form-group"><label class="form-label">Descrição</label><input class="form-input" id="pg-desc" data-editando="${p?'1':'0'}" value="${esc(p?.descricao||labelNaturezaV32(n0))}"></div></div><div style="padding:10px 12px;margin-top:12px;background:#f9fafb;border:1px solid var(--borda);border-radius:8px;font-size:12px;color:var(--texto-muted)"><strong>Competência x caixa:</strong> pagamentos normais nunca deslocam a competência do contrato. Multa é a única natureza de cancelamento que também cria receita na DRE.</div><div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px"><button class="btn btn-ghost" onclick="document.getElementById('modal-pagamento-overlay').remove()">Cancelar</button><button class="btn btn-primary" onclick="confirmarPagamentoContratoV32('${esc(alunoId)}','${esc(c.id)}','${esc(pagamentoId||'')}')">Salvar</button></div></div></div>`;
+  document.body.insertAdjacentHTML('beforeend',html); togglePgCartao(); atualizarNaturezaPagamentoV32(false);
+}
+abrirModalPagamentoContrato=abrirModalPagamentoV32;
+window.abrirModalPagamentoContrato=abrirModalPagamentoContrato;
+registrarPagamento=async function(id){abrirModalPagamentoContrato(id);};
+window.registrarPagamento=registrarPagamento;
+window.confirmarPagamentoContratoV32 = async function(alunoId,contratoId,pagamentoId=''){
+  const c=contratos.find(x=>String(x.id)===String(contratoId)),a=alunos.find(x=>String(x.id)===String(alunoId));if(!c||!a)return;
+  const data=document.getElementById('pg-data')?.value,valor=Number(document.getElementById('pg-valor')?.value||0),natureza=document.getElementById('pg-natureza')?.value||'contrato';
+  if(!data||valor<=0){alert('Informe data e valor.');return;}
+  const existente=pagamentoId?pagamentos.find(p=>String(p.id)===String(pagamentoId)):null,forma=document.getElementById('pg-forma')?.value||'PIX';
+  const parcelas=forma==='Cartão'?(parseInt(document.getElementById('pg-parcelas')?.value)||null):null,valorBruto=forma==='Cartão'?(Number(document.getElementById('pg-valor-bruto')?.value||0)||null):null;
+  if(forma==='Cartão'&&valorBruto&&valorBruto<valor){alert('No cartão, o valor bruto não pode ser menor que o líquido recebido.');return;}
+  const id=pagamentoId||`pg_${contratoId}_${Date.now()}`;
+  const pg={...existente,id,contratoId:String(contratoId),alunoId:String(alunoId),alunoNome:a.nome,natureza,valor:arredV32(valor),valorLiquido:arredV32(valor),valorBruto,taxaCartaoValor:forma==='Cartão'&&valorBruto?arredV32(valorBruto-valor):null,data,forma,parcelas,descricao:document.getElementById('pg-desc')?.value.trim()||labelNaturezaV32(natureza),direcaoCaixa:natureza==='reembolso_cancelamento'?'saida':'entrada',impactaDRE:natureza==='multa_cancelamento',competenciaDRE:natureza==='multa_cancelamento'?ymV32(data):'',status:'ativo',ts:existente?.ts||Date.now(),criadoEm:existente?.criadoEm||new Date().toISOString(),atualizadoEm:new Date().toISOString()};
+  await salvarPagamentoDb(pg); await registrarAuditoria(pagamentoId?'edicao_movimentacao_aluno':'movimentacao_aluno',alunoId,a.nome,existente||{},pg);
+  document.getElementById('modal-pagamento-overlay')?.remove(); toast(natureza==='reembolso_cancelamento'?'Reembolso registrado como saída de caixa ✓':'Movimentação salva ✓'); abrirPerfilAluno(alunoId);
+};
+window.confirmarPagamentoContrato=window.confirmarPagamentoContratoV32;
+
+// Cadastro de aluno: não inventar caixa pelo status inicial "pago".
+salvarAluno = async function(){
+  anivGarantirCampoNovoAlunoV14(); reajGarantirCamposNovoAlunoV17();
+  const nome=document.getElementById('f-nome').value.trim();if(!nome){alert('Informe o nome.');return;}
+  const alunoId=gerarId(),dataEntrada=document.getElementById('f-inicio').value||HOJE.toISOString().split('T')[0],nascimento=document.getElementById('f-nascimento')?.value||'',reajusteInicio=document.getElementById('f-reajusteInicio')?.value||'',reajusteFim=document.getElementById('f-reajusteFim')?.value||'';
+  const aluno={id:alunoId,nome,whats:document.getElementById('f-whats').value.trim(),nascimento,dataNascimento:nascimento,reajusteInicio,reajusteFim,dataEntrada,frequencia:3,ferias:[],turmas:[],obsAluno:'',statusGeral:'ativo'};
+  const plano=document.getElementById('f-plano').value,valor=parseFloat(document.getElementById('f-valor').value)||0,inicio=dataEntrada,venc=document.getElementById('f-venc').value,parcelasVal=document.getElementById('f-parcelas')?.value||'';
+  if(!inicio||!venc||valor<=0){alert('Preencha início, vencimento e valor do contrato.');return;}
+  const contratoId=`ct_${alunoId}_${Date.now()}`,contrato={id:contratoId,alunoId,alunoNome:nome,nome:'Contrato inicial',plano,valorTotal:valor,inicio,venc,pgto:document.getElementById('f-pgto').value,parcelas:parcelasVal?parseInt(parcelasVal):null,recebimento:document.getElementById('f-recebimento').value,status:'ativo',obs:document.getElementById('f-obs').value.trim(),criadoEm:new Date().toISOString(),ts:Date.now()};
+  alunos.push(aluno);contratos.push(contrato);await salvarAlunoDb(aluno);await salvarContratoDb(contrato);await registrarAuditoria('cadastro_aluno',alunoId,nome,{}, {aluno,contrato});
+  closeModalAluno();hidratarAlunosComContratos();toast('Aluno e contrato cadastrados. Registre o pagamento separadamente para movimentar o caixa.');render();
+};
+window.salvarAluno=salvarAluno;
+
+// ──────────────────────────────────────────────────
+// CANCELAMENTO: SIMULAÇÃO → CONFIRMAÇÃO DOCUMENTAL
+// ──────────────────────────────────────────────────
+function calcularCancelamentoV32(c,{dataCancelamento,valorTotal,valorVista,extrasTotal}={}){
+  const data=dataCancelamento||new Date().toISOString().split('T')[0],mesesPlano=Math.max(1,mesesContrato(c)),mesesUsados=mesesUsadosPorDataCancelamentoV31(c,data);
+  const total=Number(valorTotal??valorContrato(c)||0),vista=Number(valorVista??valorVistaReferenciaV26(c)||0),pago=Number(totalPagoContrato(c.id)||0),extras=Number(extrasTotal||0),pct=percentualMultaReembolsoV26(c.plano,mesesUsados),mensal=mesesPlano?total/mesesPlano:total;
+  const consumido=c.plano==='mensal'?total:mensal*mesesUsados,multa=c.plano==='mensal'?0:total*pct/100,custo=consumido+multa+extras,reembolsoTeorico=c.plano==='mensal'?0:Math.max(0,vista-custo),saldo=pago-custo;
+  let tipo='sem_acerto',reembolso=0,receber=0;
+  if(saldo < -0.005){tipo='receber';receber=Math.abs(saldo);} else if(saldo>0.005&&reembolsoTeorico>0.005){tipo='reembolso';reembolso=Math.min(reembolsoTeorico,saldo);}
+  return {dataCancelamento:data,ultimaCompetencia:competenciaPorMesesUsadosV31(c,Math.max(1,mesesUsados)),fimCicloConsumido:fimCicloConsumidoV31(c,mesesUsados),mesesPlano,mesesUsados,mesesRestantes:Math.max(0,mesesPlano-mesesUsados),valorTotal:arredV32(total),valorVista:arredV32(vista),valorPagoConsiderado:arredV32(pago),valorMensal:arredV32(mensal),percentualMulta:pct,valorConsumido:arredV32(consumido),multaRetida:arredV32(multa),extrasDescontados:arredV32(extras),totalDevidoCancelamento:arredV32(custo),reembolsoTeorico:arredV32(reembolsoTeorico),saldoFinanceiro:arredV32(saldo),tipoAcerto:tipo,valorReembolsado:arredV32(reembolso),valorAReceber:arredV32(receber),valorAcertoSugerido:arredV32(tipo==='reembolso'?reembolso:tipo==='receber'?receber:0)};
+}
+function extrasModalV32(){ return [...document.querySelectorAll('#cr-extras-v32 .extra-v32')].map(r=>({descricao:r.querySelector('.extra-desc-v32')?.value.trim()||'Extra/benefício',valor:Number(r.querySelector('.extra-val-v32')?.value||0)})).filter(x=>x.valor>0); }
+function totalExtrasModalV32(){return extrasModalV32().reduce((s,x)=>s+x.valor,0);}
+window.addExtraCancelamentoV32=function(desc='',valor=''){
+  const box=document.getElementById('cr-extras-v32');if(!box)return;
+  box.insertAdjacentHTML('beforeend',`<div class="extra-v32" style="display:grid;grid-template-columns:1fr 140px 36px;gap:8px;margin-bottom:8px"><input class="form-input extra-desc-v32" placeholder="Ex.: consulta com fisio" value="${esc(desc)}"><input class="form-input extra-val-v32" type="number" step="0.01" placeholder="0,00" value="${valor!==''?Number(valor).toFixed(2):''}" oninput="recalcularCancelamentoV32(true)"><button type="button" class="btn btn-danger btn-sm" onclick="this.closest('.extra-v32').remove();recalcularCancelamentoV32(true)">✕</button></div>`);
+};
+window.recalcularCancelamentoV32=function(sincAcordo=true){
+  const cid=document.getElementById('cr-contrato-id')?.value,c=contratos.find(x=>String(x.id)===String(cid));if(!c)return;
+  const calc=calcularCancelamentoV32(c,{dataCancelamento:document.getElementById('cr-data')?.value,valorTotal:Number(document.getElementById('cr-total')?.value||0),valorVista:Number(document.getElementById('cr-vista')?.value||0),extrasTotal:totalExtrasModalV32()});
+  const put=(id,v)=>{const el=document.getElementById(id);if(el)el.value=v;};
+  put('cr-meses',calc.mesesUsados);put('cr-mensal',calc.valorMensal.toFixed(2));put('cr-pct',calc.percentualMulta);put('cr-consumido',calc.valorConsumido.toFixed(2));put('cr-multa',calc.multaRetida.toFixed(2));put('cr-pago',calc.valorPagoConsiderado.toFixed(2));put('cr-teorico',calc.reembolsoTeorico.toFixed(2));put('cr-custo',calc.totalDevidoCancelamento.toFixed(2));put('cr-saldo',calc.saldoFinanceiro.toFixed(2));put('cr-tipo',calc.tipoAcerto);
+  if(sincAcordo){put('cr-acordado',calc.valorAcertoSugerido.toFixed(2));put('cr-qtd',calc.tipoAcerto==='reembolso'?Math.max(1,calc.mesesRestantes):(calc.tipoAcerto==='receber'?1:0));}
+  const lab=calc.tipoAcerto==='reembolso'?'A reembolsar ao aluno':calc.tipoAcerto==='receber'?'A receber do aluno':'Sem valor a acertar',cor=calc.tipoAcerto==='reembolso'?'var(--verde)':calc.tipoAcerto==='receber'?'#b45309':'#6b7280',res=document.getElementById('cr-resultado');
+  if(res)res.innerHTML=`<div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--texto-muted)">Resultado da simulação</div><div style="display:flex;justify-content:space-between;gap:12px;margin-top:5px"><strong style="font-size:17px;color:${cor}">${lab}</strong><strong style="font-size:20px;color:${cor}">${fmtValor(calc.valorAcertoSugerido)}</strong></div><div style="font-size:12px;color:var(--texto-muted);margin-top:6px">Reembolso teórico: ${fmtValor(calc.reembolsoTeorico)} · saldo financeiro real: ${calc.saldoFinanceiro<0?'-':''}${fmtValor(Math.abs(calc.saldoFinanceiro))}.</div>`;
+  const wrap=document.getElementById('cr-parcelas-wrap');if(wrap)wrap.style.display=calc.tipoAcerto==='sem_acerto'?'none':'';
+  atualizarParcelasCancelamentoV32();
+};
+window.atualizarParcelasCancelamentoV32=function(){
+  const valor=Number(document.getElementById('cr-acordado')?.value||0),qtd=Number(document.getElementById('cr-qtd')?.value||0),data=document.getElementById('cr-primeira')?.value||document.getElementById('cr-data')?.value,box=document.getElementById('cr-cronograma');
+  if(box)box.innerHTML=renderParcelasAcertoV31(gerarParcelasAcertoV31(valor,qtd,data));
+};
+function abrirSimulacaoCancelamentoV32(alunoId,contratoId){
+  const a=alunos.find(x=>String(x.id)===String(alunoId)),c=contratos.find(x=>String(x.id)===String(contratoId));if(!a||!c){alert('Contrato não encontrado.');return;}
+  const hoje=new Date().toISOString().split('T')[0],calc=calcularCancelamentoV32(c,{dataCancelamento:hoje});
+  const html=`<div style="position:fixed;inset:0;background:rgba(0,0,0,.58);z-index:580;display:flex;align-items:center;justify-content:center;padding:16px" id="modal-cancelamento-v26"><div style="background:#fff;border-radius:12px;width:100%;max-width:900px;max-height:94vh;overflow-y:auto;box-shadow:var(--shadow-lg)"><div style="padding:20px 24px;border-bottom:1px solid var(--borda);display:flex;justify-content:space-between"><div><div style="font-family:'Bebas Neue',sans-serif;font-size:24px">Simular cancelamento</div><div style="font-size:12px;color:var(--texto-muted)"><strong>${esc(a.nome)}</strong> · ${esc(nomeContrato(c))} · ${fmtData(c.inicio)} → ${fmtData(c.venc)}</div></div><button onclick="document.getElementById('modal-cancelamento-v26').remove()" style="background:none;border:0;font-size:20px;cursor:pointer;color:#999">✕</button></div><div style="padding:12px 24px;background:#eff6ff;border-bottom:1px solid #bfdbfe;color:#1e40af;font-size:12px"><strong>Simulação:</strong> nada será salvo até a confirmação. Confirmar encerra o contrato e registra a apuração, mas não lança DRE nem caixa.</div><input type="hidden" id="cr-aluno-id" value="${esc(a.id)}"><input type="hidden" id="cr-contrato-id" value="${esc(c.id)}"><input type="hidden" id="cr-tipo" value="${calc.tipoAcerto}"><div class="form-grid" style="padding:20px 24px"><div class="form-group"><label class="form-label">Data do cancelamento</label><input class="form-input" type="date" id="cr-data" value="${hoje}" onchange="recalcularCancelamentoV32(true)"><div class="form-hint">O novo mês começa no aniversário mensal do contrato.</div></div><div class="form-group"><label class="form-label">Meses utilizados</label><input class="form-input" id="cr-meses" readonly value="${calc.mesesUsados}"></div><div class="form-group"><label class="form-label">Valor total do contrato</label><input class="form-input" type="number" step="0.01" id="cr-total" value="${calc.valorTotal.toFixed(2)}" oninput="recalcularCancelamentoV32(true)"></div><div class="form-group"><label class="form-label">Valor à vista de referência</label><input class="form-input" type="number" step="0.01" id="cr-vista" value="${calc.valorVista.toFixed(2)}" oninput="recalcularCancelamentoV32(true)"></div><div class="form-group"><label class="form-label">Valor mensal contratual</label><input class="form-input" id="cr-mensal" readonly value="${calc.valorMensal.toFixed(2)}"></div><div class="form-group"><label class="form-label">Valor utilizado</label><input class="form-input" id="cr-consumido" readonly value="${calc.valorConsumido.toFixed(2)}"></div><div class="form-group"><label class="form-label">Multa</label><div style="display:grid;grid-template-columns:90px 1fr;gap:8px"><input class="form-input" id="cr-pct" readonly value="${calc.percentualMulta}"><input class="form-input" id="cr-multa" readonly value="${calc.multaRetida.toFixed(2)}"></div></div><div class="form-group"><label class="form-label">Total efetivamente pago neste contrato</label><input class="form-input" id="cr-pago" readonly value="${calc.valorPagoConsiderado.toFixed(2)}"><div class="form-hint">Soma automática dos pagamentos do contrato. Não é editável aqui.</div></div><div class="form-group full"><label class="form-label">Extras / benefícios utilizados</label><div id="cr-extras-v32"></div><button class="btn btn-ghost btn-sm" type="button" onclick="addExtraCancelamentoV32()">+ Adicionar extra</button></div><div class="form-group"><label class="form-label">Custo contratual apurado</label><input class="form-input" id="cr-custo" readonly value="${calc.totalDevidoCancelamento.toFixed(2)}"></div><div class="form-group"><label class="form-label">Reembolso teórico</label><input class="form-input" id="cr-teorico" readonly value="${calc.reembolsoTeorico.toFixed(2)}"></div><div class="form-group"><label class="form-label">Saldo financeiro real</label><input class="form-input" id="cr-saldo" readonly value="${calc.saldoFinanceiro.toFixed(2)}"></div><div class="form-group full"><div id="cr-resultado" class="acerto-result-v31"></div></div><div class="form-group full" id="cr-parcelas-wrap"><div style="padding:12px;border:1px solid var(--borda);border-radius:8px;background:#f9fafb"><div style="font-size:12px;font-weight:700;margin-bottom:10px">O que ficou acordado</div><div style="display:grid;grid-template-columns:1fr 130px 170px;gap:10px"><div><label class="form-label">Valor acordado</label><input class="form-input" type="number" step="0.01" id="cr-acordado" value="${calc.valorAcertoSugerido.toFixed(2)}" oninput="atualizarParcelasCancelamentoV32()"></div><div><label class="form-label">Parcelas</label><input class="form-input" type="number" min="1" id="cr-qtd" value="${calc.tipoAcerto==='reembolso'?Math.max(1,calc.mesesRestantes):(calc.tipoAcerto==='receber'?1:0)}" oninput="atualizarParcelasCancelamentoV32()"></div><div><label class="form-label">Primeira data prevista</label><input class="form-input" type="date" id="cr-primeira" value="${hoje}" onchange="atualizarParcelasCancelamentoV32()"></div></div><div id="cr-cronograma"></div></div></div><div class="form-group full"><label class="form-label">Observações / decisão tomada</label><input class="form-input" id="cr-obs" placeholder="Ex.: acordo em 3x; aluno ciente..."></div></div><div style="padding:16px 24px 20px;border-top:1px solid var(--borda);display:flex;justify-content:space-between;gap:8px"><button class="btn btn-ghost" onclick="document.getElementById('modal-cancelamento-v26').remove()">Fechar simulação</button><button class="btn btn-danger" onclick="confirmarCancelamentoV32()">Confirmar cancelamento</button></div></div></div>`;
+  document.getElementById('modal-cancelamento-v26')?.remove();document.body.insertAdjacentHTML('beforeend',html);recalcularCancelamentoV32(true);
+}
+function movsPosCancelV32(c){ return pagamentos.filter(p=>p.status!=='excluido'&&String(p.contratoId)===String(c.id)&&['multa_cancelamento','acordo_cancelamento','reembolso_cancelamento'].includes(naturezaMovAlunoV32(p))).sort((a,b)=>(dataLocal(a.data)?.getTime()||0)-(dataLocal(b.data)?.getTime()||0)); }
+function abrirDetalheCancelamentoV32(alunoId,contratoId){
+  const a=alunos.find(x=>String(x.id)===String(alunoId)),c=contratos.find(x=>String(x.id)===String(contratoId)),x=c?.cancelamento;if(!a||!c||!x){alert('Cancelamento não encontrado.');return;}
+  const tipo=x.tipoAcerto||'sem_acerto',valor=Number(x.valorAcertoAcordado||x.valorReembolsado||x.valorAReceber||0),extras=(x.extrasItens||[]).map(e=>`<tr><td>${esc(e.descricao)}</td><td style="text-align:right">${fmtValor(e.valor)}</td></tr>`).join(''),movs=movsPosCancelV32(c).map(p=>{const v=valorCaixaAlunoV32(p);return `<tr><td>${fmtData(p.data)}</td><td>${badgeNaturezaV32(p)} ${esc(p.descricao||labelNaturezaV32(p))}</td><td style="text-align:right;font-weight:700;color:${v<0?'var(--vermelho)':'var(--verde)'}">${v<0?'-':''}${fmtValor(Math.abs(v))}</td></tr>`;}).join('');
+  const html=`<div style="position:fixed;inset:0;background:rgba(0,0,0,.58);z-index:580;display:flex;align-items:center;justify-content:center;padding:16px" id="modal-cancelamento-v26"><div style="background:#fff;border-radius:12px;width:100%;max-width:860px;max-height:94vh;overflow-y:auto;box-shadow:var(--shadow-lg)"><div style="padding:20px 24px;border-bottom:1px solid var(--borda);display:flex;justify-content:space-between"><div><div style="font-family:'Bebas Neue',sans-serif;font-size:24px">Detalhes do cancelamento</div><div style="font-size:12px;color:var(--texto-muted)"><strong>${esc(a.nome)}</strong> · ${esc(nomeContrato(c))}</div></div><button onclick="document.getElementById('modal-cancelamento-v26').remove()" style="background:none;border:0;font-size:20px;cursor:pointer;color:#999">✕</button></div><div style="padding:12px 24px;background:#fef2f2;border-bottom:1px solid #fecaca;color:#991b1b;font-size:12px"><strong>Contrato cancelado em ${fmtData(x.dataCancelamento)}.</strong> Esta é a fotografia salva no momento da confirmação. Movimentações posteriores ficam separadas.</div><div style="padding:20px 24px"><div class="section-box" style="box-shadow:none;margin-bottom:16px"><div class="section-header"><div class="section-title">Apuração registrada</div></div><table><tbody><tr><td>Valor total</td><td style="text-align:right">${fmtValor(x.valorTotal||0)}</td></tr><tr><td>Valor à vista</td><td style="text-align:right">${fmtValor(x.valorVista||0)}</td></tr><tr><td>Valor mensal</td><td style="text-align:right">${fmtValor(x.valorMensal||0)}</td></tr><tr><td>Meses utilizados</td><td style="text-align:right">${Number(x.mesesUsados||0)} de ${Number(x.mesesPlano||0)}</td></tr><tr><td>Valor utilizado</td><td style="text-align:right">${fmtValor(x.valorConsumido||0)}</td></tr><tr><td>Multa (${Number(x.percentualMulta||0)}%)</td><td style="text-align:right">${fmtValor(x.multaRetida||0)}</td></tr><tr><td>Extras</td><td style="text-align:right">${fmtValor(x.extrasDescontados||0)}</td></tr><tr><td><strong>Custo contratual</strong></td><td style="text-align:right"><strong>${fmtValor(x.totalDevidoCancelamento||0)}</strong></td></tr><tr><td>Reembolso teórico</td><td style="text-align:right">${fmtValor(x.reembolsoTeorico||0)}</td></tr><tr><td>Valor pago considerado</td><td style="text-align:right">${fmtValor(x.valorPagoConsiderado||0)}</td></tr><tr><td>Saldo financeiro real</td><td style="text-align:right">${x.saldoFinanceiro<0?'-':''}${fmtValor(Math.abs(Number(x.saldoFinanceiro||0)))}</td></tr></tbody></table></div>${extras?`<div class="section-box" style="box-shadow:none;margin-bottom:16px"><div class="section-header"><div class="section-title">Extras utilizados</div></div><table><tbody>${extras}</tbody></table></div>`:''}<div class="acerto-result-v31 ${tipo}" style="margin-bottom:16px"><div style="font-size:11px;text-transform:uppercase;letter-spacing:1px">Resultado acordado</div><div style="display:flex;justify-content:space-between;gap:12px;margin-top:5px"><strong>${esc(labelTipoAcertoV31(tipo))}</strong><strong style="font-size:20px">${fmtValor(valor)}</strong></div><div style="font-size:12px;margin-top:5px">${Number(x.qtdParcelas||0)>1?`${Number(x.qtdParcelas)} parcelas`:'Pagamento único / sem parcelamento'}.</div></div><div class="section-box" style="box-shadow:none;margin-bottom:16px"><div class="section-header"><div><div class="section-title">Movimentações posteriores</div><div style="font-size:12px;color:var(--texto-muted)">Só estas movimentações efetivamente registradas afetam DRE/caixa.</div></div></div><div class="table-wrap"><table><thead><tr><th>Data</th><th>Natureza</th><th style="text-align:right">Caixa</th></tr></thead><tbody>${movs||'<tr><td colspan="3"><div class="empty">Nenhuma movimentação financeira registrada após o cancelamento.</div></td></tr>'}</tbody></table></div></div><div style="font-size:12px;color:var(--texto-muted)"><strong>Observação:</strong> ${esc(x.observacao||'—')}</div></div><div style="padding:16px 24px 20px;border-top:1px solid var(--borda);display:flex;justify-content:flex-end;gap:8px"><button class="btn btn-ghost" onclick="gerarComprovanteCancelamentoV32('${esc(alunoId)}','${esc(contratoId)}')">📄 Comprovante</button><button class="btn btn-primary" onclick="document.getElementById('modal-cancelamento-v26').remove()">Fechar</button></div></div></div>`;
+  document.getElementById('modal-cancelamento-v26')?.remove();document.body.insertAdjacentHTML('beforeend',html);
+}
+window.abrirModalCancelamentoV26=function(alunoId,contratoId=''){
+  const a=alunos.find(x=>String(x.id)===String(alunoId)),lista=contratosDoAluno(alunoId),c=contratos.find(x=>String(x.id)===String(contratoId))||a?.contratoAtual||lista[lista.length-1];
+  if(!c){alert('Contrato não encontrado.');return;} if(c.status==='cancelado'||c.cancelamento)abrirDetalheCancelamentoV32(alunoId,c.id);else abrirSimulacaoCancelamentoV32(alunoId,c.id);
+};
+window.confirmarCancelamentoV32=async function(){
+  const alunoId=document.getElementById('cr-aluno-id')?.value,contratoId=document.getElementById('cr-contrato-id')?.value,a=alunos.find(x=>String(x.id)===String(alunoId)),c=contratos.find(x=>String(x.id)===String(contratoId));if(!a||!c)return;
+  const data=document.getElementById('cr-data')?.value,extrasItens=extrasModalV32(),calc=calcularCancelamentoV32(c,{dataCancelamento:data,valorTotal:Number(document.getElementById('cr-total')?.value||0),valorVista:Number(document.getElementById('cr-vista')?.value||0),extrasTotal:extrasItens.reduce((s,x)=>s+x.valor,0)}),valorAcordado=Math.max(0,Number(document.getElementById('cr-acordado')?.value||0)),qtd=calc.tipoAcerto==='sem_acerto'?0:Math.max(1,Number(document.getElementById('cr-qtd')?.value||1)),primeira=document.getElementById('cr-primeira')?.value||data,parcelas=gerarParcelasAcertoV31(valorAcordado,qtd,primeira);
+  if(!confirm(`Confirmar o cancelamento de ${a.nome} em ${fmtData(data)}?\n\n${labelTipoAcertoV31(calc.tipoAcerto)}: ${fmtValor(valorAcordado)}.\n\nNenhum lançamento será criado automaticamente na DRE ou no caixa.`))return;
+  const snapshot=pagamentosDoContrato(c.id).map(p=>({id:p.id,data:p.data,valor:Number(p.valor||0),forma:p.forma||'',descricao:p.descricao||''}));
+  const cancelamento={status:'confirmado',...calc,extrasItens,valorAcertoAcordado:arredV32(valorAcordado),valorReembolsado:calc.tipoAcerto==='reembolso'?arredV32(valorAcordado):0,valorAReceber:calc.tipoAcerto==='receber'?arredV32(valorAcordado):0,qtdParcelas:qtd,dataPrimeiraParcela:primeira,parcelasAcerto:parcelas,pagamentosSnapshot:snapshot,observacao:document.getElementById('cr-obs')?.value.trim()||'',semLancamentoFinanceiroAutomatico:true,criadoEm:new Date().toISOString(),ts:Date.now()};
+  const atualizado={...c,status:'cancelado',cancelamento,vencOriginal:c.vencOriginal||c.venc,atualizadoEm:new Date().toISOString()};await salvarContratoDb(atualizado);await setDoc(doc(db,'cancelamentos_reembolsos',String(contratoId)),{id:String(contratoId),contratoId:String(contratoId),alunoId:String(alunoId),alunoNome:a.nome,...cancelamento});
+  const hist={id:`hist_cancel_${contratoId}_${Date.now()}`,alunoId:String(alunoId),alunoNome:a.nome,contratoId:String(contratoId),tipo:'cancelamento_contrato',data,valor:cancelamento.valorAcertoAcordado,tipoAcerto:cancelamento.tipoAcerto,descricao:'Cancelamento de contrato',status:'ativo',ts:Date.now()};await setDoc(doc(db,'historico',hist.id),hist);await registrarAuditoria('cancelamento_contrato',alunoId,a.nome,{}, {contratoId,cancelamento});
+  document.getElementById('modal-cancelamento-v26')?.remove();hidratarAlunosComContratos();toast('Contrato cancelado e apuração registrada ✓');abrirPerfilAluno(alunoId);
+};
+window.confirmarCancelamentoReembolsoV26=window.confirmarCancelamentoV32;
+window.gerarComprovanteCancelamentoV32=function(alunoId,contratoId){
+  const a=alunos.find(x=>String(x.id)===String(alunoId)),c=contratos.find(x=>String(x.id)===String(contratoId)),x=c?.cancelamento;if(!a||!c||!x)return;
+  const tipo=x.tipoAcerto||'sem_acerto',valor=Number(x.valorAcertoAcordado||0),extras=(x.extrasItens||[]).map(e=>`<tr><td>${esc(e.descricao)}</td><td style="text-align:right">${fmtValor(e.valor)}</td></tr>`).join(''),parcelas=(x.parcelasAcerto||[]).map(p=>`<tr><td>${p.numero}</td><td>${fmtData(p.data)}</td><td style="text-align:right">${fmtValor(p.valor)}</td></tr>`).join('');
+  const html=`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Cancelamento — ${esc(a.nome)}</title><style>body{font-family:Arial,sans-serif;max-width:760px;margin:auto;padding:32px;color:#111}h1{border-bottom:3px solid #111;padding-bottom:12px}h2{font-size:15px;background:#111;color:#fff;padding:8px;margin:22px 0 0}table{width:100%;border-collapse:collapse;border:1px solid #eee}td,th{padding:8px;border-bottom:1px solid #eee}.resultado{margin-top:20px;border:2px solid #D32F2F;border-radius:8px;padding:15px}.no-print{margin-bottom:18px;padding:10px 20px}@media print{.no-print{display:none}}</style></head><body><button class="no-print" onclick="window.print()">Imprimir / Salvar PDF</button><h1>Studio FB — Registro de Cancelamento</h1><p><strong>Aluno:</strong> ${esc(a.nome)}<br><strong>Contrato:</strong> ${esc(nomeContrato(c))}<br><strong>Início:</strong> ${fmtData(c.inicio)} · <strong>Cancelamento:</strong> ${fmtData(x.dataCancelamento)}</p><h2>Apuração</h2><table><tbody><tr><td>Valor total</td><td style="text-align:right">${fmtValor(x.valorTotal)}</td></tr><tr><td>Valor à vista</td><td style="text-align:right">${fmtValor(x.valorVista)}</td></tr><tr><td>Valor pago considerado</td><td style="text-align:right">${fmtValor(x.valorPagoConsiderado)}</td></tr><tr><td>Meses utilizados</td><td style="text-align:right">${x.mesesUsados}/${x.mesesPlano}</td></tr><tr><td>Valor utilizado</td><td style="text-align:right">${fmtValor(x.valorConsumido)}</td></tr><tr><td>Multa (${x.percentualMulta}%)</td><td style="text-align:right">${fmtValor(x.multaRetida)}</td></tr><tr><td>Extras</td><td style="text-align:right">${fmtValor(x.extrasDescontados)}</td></tr><tr><td><strong>Custo contratual</strong></td><td style="text-align:right"><strong>${fmtValor(x.totalDevidoCancelamento)}</strong></td></tr><tr><td>Reembolso teórico</td><td style="text-align:right">${fmtValor(x.reembolsoTeorico)}</td></tr><tr><td>Saldo financeiro real</td><td style="text-align:right">${x.saldoFinanceiro<0?'-':''}${fmtValor(Math.abs(Number(x.saldoFinanceiro||0)))}</td></tr></tbody></table>${extras?`<h2>Extras utilizados</h2><table>${extras}</table>`:''}<div class="resultado"><strong>${esc(labelTipoAcertoV31(tipo))}</strong><div style="font-size:26px;margin-top:5px">${fmtValor(valor)}</div><div style="font-size:12px;color:#555;margin-top:6px">Este documento registra a apuração e o acordo. Não representa, por si só, lançamento na DRE ou no caixa.</div></div>${parcelas?`<h2>Programação acordada</h2><table><thead><tr><th>Parcela</th><th>Data prevista</th><th style="text-align:right">Valor</th></tr></thead><tbody>${parcelas}</tbody></table>`:''}<p><strong>Observação:</strong> ${esc(x.observacao||'—')}</p></body></html>`;
+  const w=window.open('','_blank');if(!w){alert('Libere pop-ups para gerar o comprovante.');return;}w.document.write(html);w.document.close();
+};
+window.gerarComprovanteCancelamentoV31=window.gerarComprovanteCancelamentoV32;
+
+// Perfil: tornar a natureza das movimentações visível e renomear cancelamento.
+function ajustarPerfilV32(id){
+  const box=[...document.querySelectorAll('#content .section-box')].find(el=>(el.querySelector('.section-title')?.textContent||'').includes('Pagamentos e Aulas Extras'));
+  if(box){
+    const tbody=box.querySelector('tbody');
+    if(tbody)tbody.innerHTML=pagamentosDoAluno(id).map(p=>{const v=valorCaixaAlunoV32(p),c=contratos.find(x=>String(x.id)===String(p.contratoId));return `<tr><td>${fmtData(p.data)}</td><td><strong>${esc(p.descricao||labelNaturezaV32(p))}</strong>${badgeNaturezaV32(p)}<div style="font-size:11px;color:var(--texto-muted)">${esc(nomeContrato(c||{}))} · ${p.forma||'—'}${detalheCartaoTexto(p)} · caixa ${v<0?'saída':'entrada'}</div></td><td style="font-weight:700;color:${v<0?'var(--vermelho)':'var(--verde)'}">${v<0?'-':''}${fmtValor(Math.abs(v))}</td><td style="white-space:nowrap"><button class="btn btn-ghost btn-sm" onclick="editarPagamento('${id}','${p.id}')">✏️</button><button class="btn btn-danger btn-sm" onclick="excluirPagamento('${id}','${p.id}')">🗑</button></td></tr>`;}).join('')||'<tr><td colspan="4"><div class="empty">Nenhuma movimentação registrada.</div></td></tr>';
+    const sh=box.querySelector('.section-header div > div[style*="font-size:12px"]');if(sh)sh.textContent='A natureza escolhida define automaticamente o destino em DRE e/ou caixa.';
+  }
+  document.querySelectorAll('.btn-cancelamento-v26,[data-cancelamento-v29]').forEach(btn=>{
+    const oc=btn.getAttribute('onclick')||'',m=oc.match(/abrirModalCancelamentoV26\('([^']+)','([^']+)'\)/);if(!m)return;const c=contratos.find(x=>String(x.id)===String(m[2]));if(c)btn.textContent=(c.status==='cancelado'||c.cancelamento)?'📄 Detalhar cancelamento':'⛔ Cancelar contrato';
+  });
+  document.querySelectorAll('.resumo-cancelamento-v26').forEach(el=>{
+    const alvo=[...el.querySelectorAll('div')].find(x=>(x.textContent||'').includes('Receita extra de cancelamento'));if(alvo)alvo.innerHTML='<strong>Registro documental:</strong> este cancelamento não criou lançamento automático na DRE nem no caixa.';
+  });
+}
+const abrirPerfilBaseV32=abrirPerfilAluno;
+abrirPerfilAluno=async function(id){await abrirPerfilBaseV32(id);setTimeout(()=>ajustarPerfilV32(String(id)),0);};
+window.abrirPerfilAluno=abrirPerfilAluno;
+
+// ──────────────────────────────────────────────────
+// FINANCEIRO AUDITADO
+// ──────────────────────────────────────────────────
+renderFinanceiroView = async function(){
+  loading(true);await carregarMovCaixa();
+  const cats=await loadDespesas(finMes,finAno),despComp=totalDesp(cats),despCx=totalDespesaCaixaV32(finMes,finAno),recComp=receitaMesEsp(finMes,finAno),recCx=receitaCaixaMes(finMes,finAno),rec=financeiroModo==='competencia'?recComp:recCx,desp=financeiroModo==='competencia'?despComp:despCx,res=rec-desp;
+  let linhasReceita='';
+  if(financeiroModo==='competencia'){
+    contratos.filter(c=>contratoContaCompetenciaMes(c,finMes,finAno)).forEach(c=>{const v=valorCompetenciaContratoMesV28(c,finMes,finAno);linhasReceita+=`<tr><td>${esc(c.alunoNome||'—')}</td><td>${esc(nomeContrato(c))}<div style="font-size:11px;color:var(--texto-muted)">${competenciaResumoContratoMesV18(c,finMes,finAno)}</div></td><td style="text-align:right;color:var(--verde);font-weight:700">${fmtValor(v)}</td></tr>`;});
+    aulasExtrasMes(finMes,finAno).forEach(p=>linhasReceita+=`<tr><td>${esc(p.alunoNome||'—')}</td><td>Aula extra<div style="font-size:11px;color:var(--texto-muted)">${fmtData(p.data)}</div></td><td style="text-align:right;color:var(--verde);font-weight:700">${fmtValor(p.valor)}</td></tr>`);
+    multasMesV32(finMes,finAno).forEach(p=>linhasReceita+=`<tr><td>${esc(p.alunoNome||'—')}</td><td>Multa rescisória<div style="font-size:11px;color:var(--texto-muted)">${fmtData(p.data)} · registrada manualmente</div></td><td style="text-align:right;color:var(--verde);font-weight:700">${fmtValor(p.valor)}</td></tr>`);
+  }else{
+    movimentosAlunoCaixaMesV32(finMes,finAno).forEach(p=>{const v=valorCaixaAlunoV32(p);linhasReceita+=`<tr><td>${fmtData(p.data)}</td><td><strong>${esc(p.alunoNome||'—')}</strong>${badgeNaturezaV32(p)}<div style="font-size:11px;color:var(--texto-muted)">${esc(p.descricao||labelNaturezaV32(p))} · ${p.forma||'—'}${detalheCartaoTexto(p)}</div></td><td style="text-align:right;font-weight:700;color:${v<0?'var(--vermelho)':'var(--verde)'}">${v<0?'-':''}${fmtValor(Math.abs(v))}</td></tr>`;});
+  }
+  let linhasDesp='';
+  if(financeiroModo==='competencia')Object.entries(cats||{}).forEach(([cat,lista])=>(lista||[]).filter(d=>Number(d.valor)>0).forEach(d=>linhasDesp+=`<tr><td>${esc(d.desc)}<div style="font-size:11px;color:var(--texto-muted)">${esc(catLabelV32(cat))}</div></td><td style="text-align:right;font-weight:700">${fmtValor(d.valor)}</td></tr>`));
+  else movDespesasMesV32(finMes,finAno).forEach(m=>linhasDesp+=`<tr><td>${fmtData(m.data)}</td><td>${esc(m.descricao||'Despesa')}<div style="font-size:11px;color:var(--texto-muted)">Competência ${esc(m.competencia||'—')}${m.conta?` · ${esc(m.conta)}`:''}</div></td><td style="text-align:right;font-weight:700;color:var(--vermelho)">-${fmtValor(m.valor)}</td></tr>`);
+  const anual=[];for(let m=0;m<12;m++){const r=financeiroModo==='competencia'?receitaMesEsp(m,finAno):receitaCaixaMes(m,finAno),d=financeiroModo==='competencia'?totalDesp(await loadDespesas(m,finAno)):totalDespesaCaixaV32(m,finAno);anual.push({m,r,d,res:r-d});}
+  const ar=anual.reduce((s,x)=>s+x.r,0),ad=anual.reduce((s,x)=>s+x.d,0),ares=ar-ad;
+  document.getElementById('content').innerHTML=`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:12px"><div class="mes-selector"><button class="mes-btn" onclick="navegarFin(-1)">◀</button><div class="mes-label">${MESES_NOMES[finMes]} ${finAno}</div><button class="mes-btn" onclick="navegarFin(1)">▶</button></div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn ${financeiroModo==='competencia'?'btn-primary':'btn-ghost'} btn-sm" onclick="setModoFinanceiro('competencia')">Competência</button><button class="btn ${financeiroModo==='caixa'?'btn-primary':'btn-ghost'} btn-sm" onclick="setModoFinanceiro('caixa')">Caixa</button><button class="btn btn-ghost btn-sm" onclick="setView('despesas')">✏️ Despesas / baixas</button><button class="btn btn-primary btn-sm" onclick="imprimirDRE()">🖨️ Imprimir</button></div></div><div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:12px 16px;font-size:13px;margin-bottom:20px"><strong>${financeiroModo==='competencia'?'Competência':'Caixa realizado'}.</strong> ${financeiroModo==='competencia'?'A receita de contrato segue os ciclos contratuais, mesmo se o pagamento ocorrer em outro mês.':'Somente dinheiro efetivamente recebido ou pago entra nesta visão.'} Comp.: <strong>${fmtValor(recComp)}</strong> · Caixa alunos líquido: <strong>${recCx<0?'-':''}${fmtValor(Math.abs(recCx))}</strong>.</div><div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:24px"><div class="card" style="border-top:3px solid var(--verde)"><div class="card-label">${financeiroModo==='competencia'?'Receita DRE':'Caixa líquido — alunos'}</div><div class="card-value" style="font-size:24px;color:${rec>=0?'var(--verde)':'var(--vermelho)'}">${rec<0?'-':''}${fmtValor(Math.abs(rec))}</div><div class="card-sub">${financeiroModo==='caixa'?`Entradas ${fmtValor(entradasAlunoV32(finMes,finAno))} · reembolsos ${fmtValor(reembolsosAlunoV32(finMes,finAno))}`:'ciclos + aulas extras + multas registradas'}</div></div><div class="card" style="border-top:3px solid var(--vermelho)"><div class="card-label">${financeiroModo==='competencia'?'Despesas DRE':'Despesas pagas no caixa'}</div><div class="card-value" style="font-size:24px;color:var(--vermelho)">${fmtValor(desp)}</div><div class="card-sub">${financeiroModo==='caixa'?`Competência do mês: ${fmtValor(despComp)}`:'competência do mês'}</div></div><div class="card" style="border-top:3px solid ${res>=0?'var(--verde)':'var(--vermelho)'}"><div class="card-label">Resultado</div><div class="card-value" style="font-size:24px;color:${res>=0?'var(--verde)':'var(--vermelho)'}">${res<0?'-':''}${fmtValor(Math.abs(res))}</div><div class="card-sub">${financeiroModo==='competencia'?'resultado por competência':'caixa líquido realizado'}</div></div></div><div class="section-box" style="margin-bottom:24px"><div class="section-header"><div class="section-title">${financeiroModo==='competencia'?'Receitas reconhecidas':'Movimentações de alunos — Caixa'}</div></div><div class="table-wrap"><table><thead><tr>${financeiroModo==='competencia'?'<th>Aluno</th><th>Natureza / competência</th><th style="text-align:right">Valor</th>':'<th>Data</th><th>Aluno / natureza</th><th style="text-align:right">Entrada / saída</th>'}</tr></thead><tbody>${linhasReceita||'<tr><td colspan="3"><div class="empty">Nenhum registro.</div></td></tr>'}</tbody></table></div></div><div class="section-box" style="margin-bottom:24px"><div class="section-header"><div class="section-title">${financeiroModo==='competencia'?'Despesas por competência':'Despesas efetivamente pagas'}</div></div><div class="table-wrap"><table><thead><tr>${financeiroModo==='competencia'?'<th>Despesa</th><th style="text-align:right">Valor</th>':'<th>Data</th><th>Despesa</th><th style="text-align:right">Saída</th>'}</tr></thead><tbody>${linhasDesp||`<tr><td colspan="${financeiroModo==='competencia'?2:3}"><div class="empty">Nenhum registro.</div></td></tr>`}</tbody></table></div></div><div class="section-box"><div class="section-header"><div><div class="section-title">${financeiroModo==='competencia'?'Projeção anual — Competência':'Caixa realizado anual'} — ${finAno}</div><div style="font-size:12px;color:var(--texto-muted)">${financeiroModo==='caixa'?'Não projeta pagamentos futuros: mostra apenas o que já foi registrado.':'Competências contratuais do ano.'}</div></div><div style="font-size:12px;color:var(--texto-muted)">Rec: <strong style="color:var(--verde)">${fmtValor(ar)}</strong> · Desp: <strong style="color:var(--vermelho)">${fmtValor(ad)}</strong> · Res: <strong style="color:${ares>=0?'var(--verde)':'var(--vermelho)'}">${ares<0?'-':''}${fmtValor(Math.abs(ares))}</strong></div></div><div class="table-wrap"><table><thead><tr><th>Mês</th><th>Receita / entradas</th><th>Despesas</th><th>Resultado</th></tr></thead><tbody>${anual.map(x=>`<tr><td><strong>${MESES_ABREV[x.m]}</strong></td><td style="color:${x.r>=0?'var(--verde)':'var(--vermelho)'}">${x.r<0?'-':''}${fmtValor(Math.abs(x.r))}</td><td style="color:var(--vermelho)">${fmtValor(x.d)}</td><td style="font-weight:700;color:${x.res>=0?'var(--verde)':'var(--vermelho)'}">${x.res<0?'-':''}${fmtValor(Math.abs(x.res))}</td></tr>`).join('')}</tbody></table></div></div>`;
+};
+window.renderFinanceiroView=renderFinanceiroView;
+
+// Dashboard: em Caixa, substituir despesas por baixas reais.
+const renderDashboardBaseV32=renderDashboard;
+renderDashboard=async function(){
+  await renderDashboardBaseV32();if(financeiroModo!=='caixa')return;await carregarMovCaixa();
+  const rec=receitaCaixaMes(MES_ATUAL,ANO_ATUAL),desp=totalDespesaCaixaV32(MES_ATUAL,ANO_ATUAL),res=rec-desp,cards=[...document.querySelectorAll('#content .card')];
+  const cDesp=cards.find(c=>(c.querySelector('.card-label')?.textContent||'').includes('Total Despesas')),cRes=cards.find(c=>(c.querySelector('.card-label')?.textContent||'').includes('Resultado do Mês'));
+  if(cDesp){cDesp.querySelector('.card-label').textContent='Despesas pagas no caixa ↗';cDesp.querySelector('.card-value').textContent=fmtValor(desp);const s=cDesp.querySelector('.card-sub');if(s)s.textContent='somente baixas efetivamente pagas';}
+  if(cRes){const v=cRes.querySelector('.card-value');if(v){v.textContent=(res<0?'-':'')+fmtValor(Math.abs(res));v.style.color=res>=0?'var(--verde)':'var(--vermelho)';}const s=cRes.querySelector('.card-sub');if(s)s.textContent='caixa líquido realizado';}
+};
+window.renderDashboard=renderDashboard;
+
+// Caixa: corrigir subtítulo da despesa no card de resultado de caixa.
+const renderCaixaBaseV32=renderCaixaView;
+renderCaixaView=async function(){
+  await renderCaixaBaseV32();if(caixaVisao!=='mensal')return;const resumo=await resumoCaixaMes(cxMes,cxAno),card=[...document.querySelectorAll('#content .card')].find(c=>(c.querySelector('.card-label')?.textContent||'').includes('Resultado de caixa'));
+  if(card){const sub=card.querySelector('.card-sub');if(sub)sub.textContent=`Recebimentos líquidos ${fmtValor(resumo.recCx)} − despesas pagas ${fmtValor(resumo.despCaixa||0)}`;}
+};
+window.renderCaixaView=renderCaixaView;
+
+// Impressão respeita a visão selecionada.
+imprimirDRE=async function(){
+  await carregarMovCaixa();const cats=await loadDespesas(finMes,finAno),modo=financeiroModo,rec=modo==='competencia'?receitaMesEsp(finMes,finAno):receitaCaixaMes(finMes,finAno),desp=modo==='competencia'?totalDesp(cats):totalDespesaCaixaV32(finMes,finAno),res=rec-desp;
+  let lr='',ld='';
+  if(modo==='competencia'){
+    contratos.filter(c=>contratoContaCompetenciaMes(c,finMes,finAno)).forEach(c=>lr+=`<tr><td>${esc(c.alunoNome||'—')}<div class="sub">${esc(nomeContrato(c))} · ${competenciaResumoContratoMesV18(c,finMes,finAno)}</div></td><td class="num">${fmtValor(valorCompetenciaContratoMesV28(c,finMes,finAno))}</td></tr>`);
+    aulasExtrasMes(finMes,finAno).forEach(p=>lr+=`<tr><td>${esc(p.alunoNome||'—')} — Aula extra<div class="sub">${fmtData(p.data)}</div></td><td class="num">${fmtValor(p.valor)}</td></tr>`);multasMesV32(finMes,finAno).forEach(p=>lr+=`<tr><td>${esc(p.alunoNome||'—')} — Multa rescisória<div class="sub">${fmtData(p.data)}</div></td><td class="num">${fmtValor(p.valor)}</td></tr>`);
+    Object.entries(cats||{}).forEach(([cat,lista])=>(lista||[]).filter(d=>Number(d.valor)>0).forEach(d=>ld+=`<tr><td>${esc(d.desc)}<div class="sub">${esc(catLabelV32(cat))}</div></td><td class="num">${fmtValor(d.valor)}</td></tr>`));
+  }else{
+    movimentosAlunoCaixaMesV32(finMes,finAno).forEach(p=>{const v=valorCaixaAlunoV32(p);lr+=`<tr><td>${esc(p.alunoNome||'—')} — ${esc(labelNaturezaV32(p))}<div class="sub">${fmtData(p.data)} · ${esc(p.descricao||'')}</div></td><td class="num" style="color:${v<0?'#D32F2F':'#2e7d32'}">${v<0?'-':''}${fmtValor(Math.abs(v))}</td></tr>`;});
+    movDespesasMesV32(finMes,finAno).forEach(m=>ld+=`<tr><td>${esc(m.descricao||'Despesa')}<div class="sub">${fmtData(m.data)} · competência ${esc(m.competencia||'—')}</div></td><td class="num">${fmtValor(m.valor)}</td></tr>`);
+  }
+  const titulo=modo==='competencia'?'DRE — Regime de Competência':'Resumo de Caixa Realizado',html=`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>${titulo}</title><style>body{font-family:Arial,sans-serif;max-width:780px;margin:auto;padding:30px;color:#111}h1{border-bottom:3px solid #111;padding-bottom:12px}h2{font-size:15px;background:#111;color:#fff;padding:8px;margin:22px 0 0}table{width:100%;border-collapse:collapse;border:1px solid #eee}td,th{padding:8px;border-bottom:1px solid #eee}.num{text-align:right;font-weight:700}.sub{font-size:11px;color:#777;margin-top:2px}.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:18px 0}.card{border:1px solid #ddd;border-radius:7px;padding:12px}.no-print{padding:10px 20px}@media print{.no-print{display:none}}</style></head><body><button class="no-print" onclick="window.print()">Imprimir / Salvar PDF</button><h1>Studio FB — ${titulo}</h1><div>${MESES_NOMES[finMes]} de ${finAno}</div><div class="cards"><div class="card"><small>${modo==='competencia'?'Receita':'Alunos líquido'}</small><div style="font-size:21px;color:#2e7d32">${rec<0?'-':''}${fmtValor(Math.abs(rec))}</div></div><div class="card"><small>${modo==='competencia'?'Despesas':'Despesas pagas'}</small><div style="font-size:21px;color:#D32F2F">${fmtValor(desp)}</div></div><div class="card"><small>Resultado</small><div style="font-size:21px;color:${res>=0?'#2e7d32':'#D32F2F'}">${res<0?'-':''}${fmtValor(Math.abs(res))}</div></div></div><h2>${modo==='competencia'?'Receitas reconhecidas':'Movimentações de alunos'}</h2><table><tbody>${lr||'<tr><td>Nenhum registro.</td><td class="num">R$ 0,00</td></tr>'}</tbody></table><h2>${modo==='competencia'?'Despesas por competência':'Despesas efetivamente pagas'}</h2><table><tbody>${ld||'<tr><td>Nenhum registro.</td><td class="num">R$ 0,00</td></tr>'}</tbody></table><p style="font-size:11px;color:#666;margin-top:18px">${modo==='competencia'?'Pagamentos atrasados ou antecipados não deslocam a competência do contrato.':'A visão de caixa usa somente datas reais de recebimento, reembolso e pagamento de despesas.'}</p></body></html>`;
+  const w=window.open('','_blank');if(!w){alert('Libere pop-ups para imprimir.');return;}w.document.write(html);w.document.close();
+};
+window.imprimirDRE=imprimirDRE;
+
+// V32.1 — preserva o controle de Notas Fiscais na visão por competência.
+const renderFinanceiroCoreV321 = renderFinanceiroView;
+renderFinanceiroView = async function(){
+  await carregarNotasFiscaisV24();
+  await renderFinanceiroCoreV321();
+  if(financeiroModo==='competencia'){
+    const box=[...document.querySelectorAll('#content .section-box')].find(el=>(el.querySelector('.section-title')?.textContent||'').includes('Receitas reconhecidas'));
+    if(box){
+      box.querySelector('.section-title').textContent='Receita — Competência';
+      aplicarNotaFiscalFinanceiroV24();
+      const multas=multasMesV32(finMes,finAno);
+      if(multas.length){
+        const receitaBox=[...document.querySelectorAll('#content .section-box')].find(el=>{const t=el.querySelector('.section-title')?.textContent||'';return t.includes('Receita')&&t.includes('Competência');});
+        receitaBox?.insertAdjacentHTML('afterend',`<div class="section-box" style="margin-bottom:24px;border-left:3px solid var(--verde)"><div class="section-header"><div><div class="section-title">Receitas extraordinárias registradas</div><div style="font-size:12px;color:var(--texto-muted)">Multas entram na DRE somente quando Fernando registra o recebimento.</div></div></div><div class="table-wrap"><table><thead><tr><th>Data</th><th>Aluno / natureza</th><th style="text-align:right">Valor</th></tr></thead><tbody>${multas.map(p=>`<tr><td>${fmtData(p.data)}</td><td><strong>${esc(p.alunoNome||'—')}</strong>${badgeNaturezaV32(p)}<div style="font-size:11px;color:var(--texto-muted)">${esc(p.descricao||'Multa rescisória')}</div></td><td style="text-align:right;font-weight:700;color:var(--verde)">${fmtValor(p.valor)}</td></tr>`).join('')}</tbody></table></div></div>`);
+      }
+    }
+  }
+};
+window.renderFinanceiroView=renderFinanceiroView;
+
+// V32.2 — renomeia corretamente os botões criados dinamicamente pela camada V29.
+const abrirPerfilBaseV322=abrirPerfilAluno;
+abrirPerfilAluno=async function(id){
+  await abrirPerfilBaseV322(id);
+  setTimeout(()=>{
+    document.querySelectorAll('[data-cancelamento-v29]').forEach(btn=>{
+      const c=contratos.find(x=>String(x.id)===String(btn.dataset.cancelamentoV29));
+      if(c)btn.textContent=(c.status==='cancelado'||c.cancelamento)?'📄 Detalhar cancelamento':'⛔ Cancelar contrato';
+    });
+  },0);
+};
+window.abrirPerfilAluno=abrirPerfilAluno;
