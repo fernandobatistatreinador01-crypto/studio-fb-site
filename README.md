@@ -65,3 +65,20 @@ Corrigida a navegação do novo Caixa:
 - mudança de mês retorna de forma segura à visão geral.
 
 A causa era o uso de variáveis internas de um módulo ES diretamente em `onclick` inline.
+
+
+## V37.5 — status de contratos no cartão
+
+Corrigida a distinção entre quitação contratual e recebimento líquido.
+
+Em pagamentos por cartão:
+
+- o valor bruto cobrado do aluno é usado para verificar quitação e saldo do contrato;
+- o valor líquido recebido pelo Studio continua sendo usado em caixa, DRE e cancelamento.
+
+Exemplo:
+- contrato bruto: R$ 5.800,00;
+- cartão bruto: R$ 5.800,00;
+- líquido recebido: R$ 5.019,63.
+
+O contrato passa a ser exibido como **Vigente e quitado**, com saldo contratual R$ 0,00.

@@ -37,3 +37,11 @@
 - Corrigidos botões mês anterior/próximo do Caixa.
 - Corrigido botão Voltar ao Caixa nos perfis.
 - Navegação da Tesouraria passa por funções públicas, compatíveis com módulo ES.
+
+
+## V37.5
+- Corrigido falso status "Vigente — parcial" em contratos pagos integralmente no cartão.
+- Status e saldo contratual passam a usar valores brutos.
+- Recebimento líquido continua separado para DRE/caixa.
+- Perfil diferencia "Recebido líquido" de "Saldo contratual".
+- Progresso deixa de mostrar falso saldo correspondente à taxa do cartão.

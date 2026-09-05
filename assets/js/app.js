@@ -11575,3 +11575,188 @@ window.diagnosticoTesourariaV374 = function(){
     perfilAberto:tesPerfilV37 ? {...tesPerfilV37} : null
   };
 };
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// V37.5 — STATUS DO CONTRATO: QUITAÇÃO BRUTA x RECEBIMENTO LÍQUIDO
+//
+// No cartão:
+// - BRUTO cobrado/pago quita o preço do contrato;
+// - LÍQUIDO recebido alimenta caixa, DRE e apuração financeira.
+//
+// O status antigo comparava líquido recebido com total bruto e marcava contratos
+// integralmente quitados no cartão como "Vigente — parcial".
+// ═══════════════════════════════════════════════════════════════════════════════
+const VERSAO_CONTRATOS_V375 = '37.5';
+
+function totalQuitacaoContratoV375(c){
+  if(!c || c.status==='excluido') return 0;
+  return Number(totalPagoBrutoContratoV34(c.id)||0);
+}
+function saldoQuitacaoContratoV375(c){
+  if(!c || c.status==='excluido') return 0;
+  return Math.max(0, Number(valorTotalBrutoContratoV34(c)||0) - totalQuitacaoContratoV375(c));
+}
+function contratoQuitadoV375(c){
+  const total=Number(valorTotalBrutoContratoV34(c)||0);
+  return total>0 && saldoQuitacaoContratoV375(c) < 0.005;
+}
+
+statusContratoObj = function(c){
+  if(!c) return {contrato:'nao_renovou',label:'Sem contrato',cor:'#6b7280',icon:'📋'};
+  if(c.status==='excluido') return {contrato:'excluido',label:'Excluído',cor:'#6b7280',icon:'🗑'};
+  if(c.status==='cancelado') return {contrato:'cancelado',label:'Cancelado',cor:'var(--vermelho)',icon:'⛔'};
+
+  const hoje=new Date();
+  const ini=dataLocal(c.inicio);
+  const venc=dataLocal(vencEfetivoContratoV26(c));
+  const quitacao=totalQuitacaoContratoV375(c);
+  const saldo=saldoQuitacaoContratoV375(c);
+
+  if(ini&&ini>hoje) return {contrato:'futuro',label:'Contrato futuro',cor:'var(--azul)',icon:'⏳'};
+
+  if(venc&&venc<hoje){
+    return saldo>0.004
+      ? {contrato:'inadimplente',label:'Vencido em aberto',cor:'var(--vermelho)',icon:'🔴'}
+      : {contrato:'quitado',label:'Quitado',cor:'var(--verde)',icon:'✅'};
+  }
+
+  if(contratoQuitadoV375(c)){
+    return {contrato:'ativo',label:'Vigente e quitado',cor:'var(--verde)',icon:'✅'};
+  }
+  if(quitacao>0){
+    return {contrato:'aguardando',label:'Vigente — parcial',cor:'var(--amarelo)',icon:'◐'};
+  }
+  return {contrato:'aguardando',label:'Vigente — em aberto',cor:'var(--azul)',icon:'⏳'};
+};
+
+statusContratoHistorico = function(c){
+  if(!c) return {contrato:'nao_renovou',label:'Sem contrato',cor:'#6b7280',icon:'📋'};
+  if(c.status==='excluido') return {contrato:'excluido',label:'Excluído',cor:'#6b7280',icon:'🗑'};
+  if(c.status==='cancelado') return {contrato:'cancelado',label:'Cancelado',cor:'var(--vermelho)',icon:'⛔'};
+
+  const hoje=new Date();
+  const ini=dataLocal(c.inicio);
+  const venc=dataLocal(vencEfetivoContratoV26(c));
+  const quitacao=totalQuitacaoContratoV375(c);
+  const saldo=saldoQuitacaoContratoV375(c);
+
+  if(ini&&ini>hoje) return {contrato:'futuro',label:'Contrato futuro',cor:'var(--azul)',icon:'⏳'};
+  if(venc&&venc<hoje){
+    return saldo>0.004
+      ? {contrato:'inadimplente',label:'Vencido em aberto',cor:'var(--vermelho)',icon:'🔴'}
+      : {contrato:'quitado',label:'Quitado',cor:'var(--verde)',icon:'✅'};
+  }
+  if(contratoQuitadoV375(c)){
+    return {contrato:'ativo',label:'Vigente e quitado',cor:'var(--verde)',icon:'✅'};
+  }
+  if(quitacao>0){
+    return {contrato:'aguardando',label:'Vigente — parcial',cor:'var(--amarelo)',icon:'◐'};
+  }
+  return {contrato:'aguardando',label:'Vigente — em aberto',cor:'var(--azul)',icon:'⏳'};
+};
+
+statusContrato = function(a){
+  return statusContratoObj(a?.contratoAtual);
+};
+
+// Progresso do contrato passa a exibir:
+// - quitação contratual pelo BRUTO;
+// - líquido recebido separadamente.
+// Isso elimina o falso "87% pago / saldo R$ 780,37".
+progressPlano = function(a){
+  const c=a?.contratoAtual;
+  if(!c) return `<div style="font-size:11px;color:var(--texto-muted);margin-top:2px">Sem contrato cadastrado</div>`;
+
+  const ini=dataLocal(c.inicio);
+  const venc=dataLocal(vencAjustadoContrato(c));
+  const hoje=new Date();
+  const totalDias=Math.max(1,Math.round((venc-ini)/86400000));
+  const diasPassados=Math.max(0,Math.min(totalDias,Math.round((hoje-ini)/86400000)));
+  const pct=Math.round((diasPassados/totalDias)*100);
+  const totalMeses=PLANO_MESES[c.plano]||1;
+  const segmento=totalDias/totalMeses;
+  const etapa=hoje<ini?0:Math.max(1,Math.min(totalMeses,Math.ceil((diasPassados||1)/segmento)));
+  const labelPeriodo=c.plano==='mensal'?`${pct}% do período`:`${etapa}/${totalMeses}`;
+
+  const totalBruto=Number(valorTotalBrutoContratoV34(c)||0);
+  const pagoBruto=totalQuitacaoContratoV375(c);
+  const saldoBruto=saldoQuitacaoContratoV375(c);
+  const recebidoLiquido=Number(totalPagoLiquidoContratoV34(c.id)||0);
+  const pctQuitacao=totalBruto>0?Math.min(100,Math.round(pagoBruto/totalBruto*100)):0;
+  const tooltipFerias=c.venc!==vencAjustadoContrato(c)?` · venc. ajustado ${fmtData(vencAjustadoContrato(c))}`:'';
+
+  const diferencaBrutoLiquido=Math.abs(pagoBruto-recebidoLiquido)>0.009;
+
+  return `<div class="progress-wrap">
+      <div class="progress-bar" style="width:80px"><div class="progress-fill" style="width:${pct}%"></div></div>
+      <span class="progress-label">${labelPeriodo}</span>
+    </div>
+    <div style="font-size:10px;color:var(--texto-muted);margin-top:2px">
+      ${fmtValor(mensalCancelamentoBrutoV34(c))}/mês contratual · Total bruto ${fmtValor(totalBruto)}${tooltipFerias}
+    </div>
+    <div style="font-size:10px;color:${saldoBruto>0.004?'var(--amarelo)':'var(--verde)'};margin-top:1px">
+      Quitação contratual ${fmtValor(pagoBruto)} (${pctQuitacao}%) · Saldo ${fmtValor(saldoBruto)}
+    </div>
+    ${diferencaBrutoLiquido?`<div style="font-size:10px;color:var(--texto-muted);margin-top:1px">Recebido líquido pelo Studio: ${fmtValor(recebidoLiquido)}</div>`:''}`;
+};
+
+// Ajusta rótulos da ficha do aluno sem alterar o valor financeiro:
+// "Pago" é líquido recebido; "Saldo" é saldo contratual bruto.
+const abrirPerfilAlunoBaseV375 = abrirPerfilAluno;
+abrirPerfilAluno = async function(id){
+  await abrirPerfilAlunoBaseV375(id);
+
+  setTimeout(()=>{
+    const boxes=[...document.querySelectorAll('#content .section-box')];
+
+    const boxContrato=boxes.find(el=>
+      (el.querySelector('.section-title')?.textContent||'').trim().toLowerCase()==='contrato vigente'
+    );
+    if(boxContrato){
+      [...boxContrato.querySelectorAll('div')].forEach(row=>{
+        const spans=row.children;
+        if(spans?.length!==2) return;
+        const label=(spans[0]?.textContent||'').trim();
+        if(label==='Pago') spans[0].textContent='Recebido líquido';
+        if(label==='Saldo') spans[0].textContent='Saldo contratual';
+      });
+    }
+
+    const boxHist=boxes.find(el=>
+      (el.querySelector('.section-title')?.textContent||'').toLowerCase().includes('histórico de contratos')
+    );
+    if(boxHist){
+      const ths=[...boxHist.querySelectorAll('thead th')];
+      ths.forEach(th=>{
+        const t=th.textContent.trim();
+        if(t==='Pago') th.textContent='Recebido líquido';
+        if(t==='Saldo') th.textContent='Saldo contratual';
+      });
+    }
+  },0);
+};
+window.abrirPerfilAluno=abrirPerfilAluno;
+
+// Identificação da versão.
+const setViewBaseV375=setView;
+setView=function(v){
+  setViewBaseV375(v);
+  if(v==='caixa'){
+    const top=document.getElementById('topbar-right');
+    if(top) top.innerHTML='<span style="font-size:11px;color:var(--texto-muted);font-weight:700;letter-spacing:.6px">TESOURARIA · V37.5</span>';
+  }
+};
+window.setView=setView;
+
+window.diagnosticoContratoV375=function(contratoId){
+  const c=contratoPorIdV36(contratoId);
+  if(!c)return null;
+  return {
+    contratoId:String(c.id),
+    totalBruto:valorTotalBrutoContratoV34(c),
+    recebidoLiquido:totalPagoLiquidoContratoV34(c.id),
+    quitacaoBruta:totalQuitacaoContratoV375(c),
+    saldoContratual:saldoQuitacaoContratoV375(c),
+    status:statusContratoObj(c)
+  };
+};
