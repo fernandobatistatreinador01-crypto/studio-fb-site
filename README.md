@@ -73,3 +73,21 @@ A despesa permanece na competência original, mas só sai do caixa depois que Fe
 - Corrigida incompatibilidade de sintaxe no cálculo de cancelamento causada pela mistura de `??` e `||` sem agrupamento explícito.
 - O `app.js` foi validado integralmente após remover apenas os imports ESM para fins de análise sintática.
 - A função de cálculo de cancelamento também foi validada isoladamente.
+
+
+## Contratos — V33
+
+Cada contrato agora armazena dois valores independentes:
+
+- `valorTotal`: valor total nominal do contrato. É a base para a competência mensal (`valorTotal ÷ meses do plano`) e para a multa rescisória.
+- `valorVistaReferencia`: valor à vista definido no contrato. É a base máxima do reembolso teórico.
+
+Contratos antigos que ainda não tenham `valorVistaReferencia` precisam ser revisados uma vez antes de uma simulação de cancelamento. O sistema não confirma cancelamento usando uma suposição silenciosa.
+
+Exemplo do contrato (anual 3x/semana):
+
+- Valor total: R$ 5.796,00
+- Valor à vista: R$ 5.087,00
+- Valor mensal contratual: R$ 483,00
+- Cancelamento no 5º mês: multa de 15% = R$ 869,40
+- Reembolso teórico sem extras: R$ 1.802,60

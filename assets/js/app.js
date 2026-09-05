@@ -8446,3 +8446,332 @@ abrirPerfilAluno=async function(id){
   },0);
 };
 window.abrirPerfilAluno=abrirPerfilAluno;
+
+// ═══════════════════════════════════════════════════
+// V33 — VALORES CONTRATUAIS SEPARADOS
+// Cada contrato passa a guardar:
+// - valorTotal: base da competência mensal e da multa;
+// - valorVistaReferencia: base máxima contratual do reembolso.
+// O cancelamento apenas lê estes valores do contrato.
+// ═══════════════════════════════════════════════════
+
+const VERSAO_CONTRATO_V33 = '33.0';
+
+function temValorVistaPersistidoV33(c){
+  return Number(c?.valorVistaReferencia ?? c?.valorVista ?? 0) > 0;
+}
+
+function sugestaoValorVistaV33(plano, frequencia, valorTotal){
+  const total = Number(valorTotal || 0);
+  if(plano === 'mensal') return total;
+  const f = Math.max(1, Math.min(5, Number(frequencia || 3)));
+  return Number(VALORES_AVISTA_REEMBOLSO_V26?.[f]?.[plano] || total || 0);
+}
+
+function valorVistaContratoV33(c){
+  const salvo = Number(c?.valorVistaReferencia ?? c?.valorVista ?? 0);
+  if(salvo > 0) return salvo;
+  const aluno = alunos.find(a=>String(a.id)===String(c?.alunoId));
+  return sugestaoValorVistaV33(c?.plano, aluno?.frequencia || c?.frequencia || 3, valorContrato(c));
+}
+
+// Sobrescreve a referência usada em toda a apuração de cancelamento.
+valorVistaReferenciaV26 = function(c){
+  return valorVistaContratoV33(c);
+};
+
+// Garante que qualquer contrato salvo pelo sistema persista o valor à vista.
+// O valor vem do formulário de contrato ou do cadastro inicial do aluno.
+const salvarContratoDbBaseV33 = salvarContratoDb;
+salvarContratoDb = async function(c){
+  if(!c) return;
+  const campoContrato = document.getElementById('ct-valor-vista');
+  const campoInicial  = document.getElementById('f-valor-vista');
+  let vistaInformada = Number(c.valorVistaReferencia ?? c.valorVista ?? 0);
+
+  if(campoContrato && Number(campoContrato.value) > 0){
+    vistaInformada = Number(campoContrato.value);
+  } else if(campoInicial && Number(campoInicial.value) > 0){
+    vistaInformada = Number(campoInicial.value);
+  } else if(c.plano === 'mensal'){
+    vistaInformada = valorContrato(c);
+  }
+
+  if(vistaInformada > 0){
+    c.valorVistaReferencia = arredV32(vistaInformada);
+  }
+
+  return salvarContratoDbBaseV33(c);
+};
+
+// ──────────────────────────────────────────────────
+// CADASTRO INICIAL DO ALUNO
+// Acrescenta "Valor à vista de referência" sem alterar o restante do modal.
+// ──────────────────────────────────────────────────
+function garantirValorVistaNovoAlunoV33(idAluno=null){
+  const valorEl = document.getElementById('f-valor');
+  if(!valorEl) return;
+
+  let group = document.getElementById('f-valor-vista-group-v33');
+  if(!group){
+    group = document.createElement('div');
+    group.className = 'form-group';
+    group.id = 'f-valor-vista-group-v33';
+    group.innerHTML = `
+      <label class="form-label">Valor à vista de referência (R$)</label>
+      <input class="form-input" id="f-valor-vista" type="number" step="0.01" placeholder="0,00">
+      <div class="form-hint">
+        Usado somente como base máxima do cálculo de cancelamento/reembolso.
+        Não substitui o valor total do contrato.
+        <button type="button" id="f-sugerir-vista-v33" style="background:none;border:0;padding:0;margin-left:4px;color:var(--vermelho);font:inherit;font-weight:700;cursor:pointer">Sugerir pela tabela</button>
+      </div>`;
+    valorEl.closest('.form-group')?.insertAdjacentElement('afterend', group);
+  }
+
+  const vistaEl = document.getElementById('f-valor-vista');
+  const planoEl = document.getElementById('f-plano');
+  const aluno = idAluno ? alunos.find(a=>String(a.id)===String(idAluno)) : null;
+  const contrato = idAluno ? (contratoVigenteAluno(idAluno) || contratosDoAluno(idAluno).slice(-1)[0]) : null;
+
+  const sugerir = ()=>{
+    const total = Number(valorEl.value || 0);
+    const plano = planoEl?.value || 'mensal';
+    const freq = aluno?.frequencia || 3;
+    vistaEl.value = sugestaoValorVistaV33(plano, freq, total).toFixed(2);
+    vistaEl.dataset.manual = '0';
+  };
+
+  if(contrato && temValorVistaPersistidoV33(contrato)){
+    vistaEl.value = valorVistaContratoV33(contrato).toFixed(2);
+    vistaEl.dataset.manual = '1';
+  } else {
+    sugerir();
+  }
+
+  if(!vistaEl.dataset.listenerV33){
+    vistaEl.addEventListener('input', ()=>{ vistaEl.dataset.manual='1'; });
+    document.getElementById('f-sugerir-vista-v33')?.addEventListener('click', sugerir);
+    planoEl?.addEventListener('change', ()=>{ if(vistaEl.dataset.manual!=='1') sugerir(); });
+    valorEl.addEventListener('input', ()=>{ if(vistaEl.dataset.manual!=='1') sugerir(); });
+    vistaEl.dataset.listenerV33='1';
+  }
+}
+
+const openModalAlunoBaseV33 = openModalAluno;
+openModalAluno = function(id){
+  openModalAlunoBaseV33(id);
+  garantirValorVistaNovoAlunoV33(id || null);
+};
+window.openModalAluno = openModalAluno;
+
+const autoPreencherPlanoBaseV33 = window.autoPreencherPlano;
+window.autoPreencherPlano = function(){
+  autoPreencherPlanoBaseV33?.();
+  const vistaEl=document.getElementById('f-valor-vista');
+  if(vistaEl && vistaEl.dataset.manual!=='1'){
+    const total=Number(document.getElementById('f-valor')?.value||0);
+    const plano=document.getElementById('f-plano')?.value||'mensal';
+    vistaEl.value=sugestaoValorVistaV33(plano,3,total).toFixed(2);
+  }
+};
+
+const salvarAlunoBaseV33 = salvarAluno;
+salvarAluno = async function(){
+  garantirValorVistaNovoAlunoV33(editandoId || null);
+  const total = Number(document.getElementById('f-valor')?.value || 0);
+  const vista = Number(document.getElementById('f-valor-vista')?.value || 0);
+  const plano = document.getElementById('f-plano')?.value || 'mensal';
+
+  if(total <= 0){
+    alert('Informe o valor total do contrato.');
+    return;
+  }
+  if(plano !== 'mensal' && vista <= 0){
+    alert('Informe o valor à vista de referência do contrato.');
+    document.getElementById('f-valor-vista')?.focus();
+    return;
+  }
+  if(vista > total && plano !== 'mensal'){
+    if(!confirm('O valor à vista está maior que o valor total do contrato. Deseja salvar assim mesmo?')) return;
+  }
+
+  await salvarAlunoBaseV33();
+};
+window.salvarAluno = salvarAluno;
+
+// ──────────────────────────────────────────────────
+// NOVO CONTRATO / RENOVAÇÃO / EDIÇÃO
+// Injeta o segundo valor no modal já existente.
+// ──────────────────────────────────────────────────
+function configurarValorVistaContratoV33(alunoId, contratoId=null){
+  const totalEl = document.getElementById('ct-valor');
+  const planoEl = document.getElementById('ct-plano');
+  if(!totalEl || !planoEl) return;
+
+  const totalGroup = totalEl.closest('.form-group');
+  const label = totalGroup?.querySelector('.form-label');
+  if(label) label.textContent = 'Valor total do contrato (R$)';
+  const hint = totalGroup?.querySelector('.form-hint');
+  if(hint) hint.innerHTML = 'Base da competência mensal e da multa rescisória.';
+
+  let group = document.getElementById('ct-valor-vista-group-v33');
+  if(!group){
+    group=document.createElement('div');
+    group.className='form-group';
+    group.id='ct-valor-vista-group-v33';
+    group.innerHTML=`
+      <label class="form-label">Valor à vista de referência (R$)</label>
+      <input class="form-input" type="number" id="ct-valor-vista" step="0.01" placeholder="0,00">
+      <div class="form-hint">
+        Base máxima para eventual reembolso.
+        <button type="button" id="ct-sugerir-vista-v33" style="background:none;border:0;padding:0;margin-left:4px;color:var(--vermelho);font:inherit;font-weight:700;cursor:pointer">Sugerir pela tabela</button>
+      </div>`;
+    totalGroup?.insertAdjacentElement('afterend',group);
+  }
+
+  const vistaEl=document.getElementById('ct-valor-vista');
+  const aluno=alunos.find(a=>String(a.id)===String(alunoId));
+  const contrato=contratoId ? contratos.find(c=>String(c.id)===String(contratoId)) : null;
+
+  const sugerir=()=>{
+    const total=Number(totalEl.value||0);
+    const plano=planoEl.value||'mensal';
+    vistaEl.value=sugestaoValorVistaV33(plano,aluno?.frequencia||3,total).toFixed(2);
+    vistaEl.dataset.manual='0';
+  };
+
+  if(contrato && temValorVistaPersistidoV33(contrato)){
+    vistaEl.value=valorVistaContratoV33(contrato).toFixed(2);
+    vistaEl.dataset.manual='1';
+  }else{
+    sugerir();
+    if(contrato && contrato.plano!=='mensal'){
+      const aviso=document.createElement('div');
+      aviso.id='ct-aviso-legado-v33';
+      aviso.style.cssText='grid-column:1/-1;background:#fffbeb;border:1px solid #fde68a;color:#92400e;border-radius:7px;padding:10px 12px;font-size:12px';
+      aviso.innerHTML='<strong>Contrato antigo:</strong> este contrato ainda não tinha o valor à vista salvo separadamente. Revise os dois valores antes de salvar.';
+      group.insertAdjacentElement('afterend',aviso);
+    }
+  }
+
+  if(!vistaEl.dataset.listenerV33){
+    vistaEl.addEventListener('input',()=>{vistaEl.dataset.manual='1';});
+    document.getElementById('ct-sugerir-vista-v33')?.addEventListener('click',sugerir);
+    planoEl.addEventListener('change',()=>{if(vistaEl.dataset.manual!=='1')sugerir();});
+    totalEl.addEventListener('input',()=>{if(vistaEl.dataset.manual!=='1')sugerir();});
+    vistaEl.dataset.listenerV33='1';
+  }
+
+  calcContratoMensalidade();
+}
+
+const abrirModalContratoBaseV33 = abrirModalContrato;
+abrirModalContrato = function(alunoId, contratoId=null){
+  abrirModalContratoBaseV33(alunoId, contratoId);
+  configurarValorVistaContratoV33(alunoId, contratoId);
+};
+window.abrirModalContrato = abrirModalContrato;
+renovar = function(id){ abrirModalContrato(id); };
+window.renovar = renovar;
+
+const confirmarSalvarContratoBaseV33 = window.confirmarSalvarContrato;
+window.confirmarSalvarContrato = async function(alunoId, contratoId){
+  const plano=document.getElementById('ct-plano')?.value||'mensal';
+  const total=Number(document.getElementById('ct-valor')?.value||0);
+  const vista=Number(document.getElementById('ct-valor-vista')?.value||0);
+
+  if(total<=0){
+    alert('Informe o valor total do contrato.');
+    return;
+  }
+  if(plano!=='mensal' && vista<=0){
+    alert('Informe o valor à vista de referência.');
+    document.getElementById('ct-valor-vista')?.focus();
+    return;
+  }
+  if(vista>total && plano!=='mensal'){
+    if(!confirm('O valor à vista está maior que o valor total do contrato. Deseja salvar assim mesmo?')) return;
+  }
+
+  await confirmarSalvarContratoBaseV33(alunoId, contratoId);
+};
+
+// ──────────────────────────────────────────────────
+// CANCELAMENTO
+// Valores ficam bloqueados: agora vêm do contrato.
+// Contrato legado sem valor à vista precisa ser revisado antes.
+// ──────────────────────────────────────────────────
+const abrirCancelamentoBaseV33 = window.abrirModalCancelamentoV26;
+window.abrirModalCancelamentoV26 = function(alunoId, contratoId=''){
+  const a=alunos.find(x=>String(x.id)===String(alunoId));
+  const c=contratos.find(x=>String(x.id)===String(contratoId))
+    || a?.contratoAtual
+    || contratoVigenteAluno(alunoId);
+
+  if(!c){
+    alert('Contrato não encontrado.');
+    return;
+  }
+
+  if(c.status!=='cancelado' && c.plano!=='mensal' && !temValorVistaPersistidoV33(c)){
+    alert(
+      'Este é um contrato antigo e ainda não possui o Valor à vista de referência salvo separadamente.\n\n' +
+      'Antes de simular o cancelamento, revise o contrato e informe:\n' +
+      '• Valor total do contrato\n' +
+      '• Valor à vista de referência'
+    );
+    abrirModalContrato(alunoId,c.id);
+    return;
+  }
+
+  abrirCancelamentoBaseV33(alunoId, contratoId || c.id);
+
+  // Na simulação, os dois valores são somente leitura.
+  setTimeout(()=>{
+    const total=document.getElementById('cr-total');
+    const vista=document.getElementById('cr-vista');
+    if(total){
+      total.readOnly=true;
+      total.title='Valor salvo no contrato. Para alterar, edite o contrato.';
+      const g=total.closest('.form-group');
+      const h=g?.querySelector('.form-hint') || document.createElement('div');
+      if(!g?.querySelector('.form-hint')){
+        h.className='form-hint'; g?.appendChild(h);
+      }
+      h.textContent='Vem do contrato e é a base da competência mensal e da multa.';
+    }
+    if(vista){
+      vista.readOnly=true;
+      vista.title='Valor salvo no contrato. Para alterar, edite o contrato.';
+      const g=vista.closest('.form-group');
+      const h=g?.querySelector('.form-hint') || document.createElement('div');
+      if(!g?.querySelector('.form-hint')){
+        h.className='form-hint'; g?.appendChild(h);
+      }
+      h.textContent='Vem do contrato e é a base máxima do reembolso.';
+    }
+  },0);
+};
+
+// Perfil: mostra os dois valores também no cabeçalho da área de contratos.
+const abrirPerfilAlunoBaseV33 = abrirPerfilAluno;
+abrirPerfilAluno = async function(id){
+  await abrirPerfilAlunoBaseV33(id);
+
+  setTimeout(()=>{
+    document.querySelectorAll('[data-cancelamento-v29]').forEach(btn=>{
+      const cid=btn.dataset.cancelamentoV29;
+      const c=contratos.find(x=>String(x.id)===String(cid));
+      if(!c) return;
+      const cel=btn.closest('td');
+      if(!cel || cel.querySelector('.valores-contrato-v33')) return;
+      const info=document.createElement('div');
+      info.className='valores-contrato-v33';
+      info.style.cssText='font-size:10.5px;color:var(--texto-muted);margin-top:6px;line-height:1.35';
+      const vista=temValorVistaPersistidoV33(c) ? fmtValor(valorVistaContratoV33(c)) : 'não cadastrado';
+      info.innerHTML=`Total: <strong>${fmtValor(valorContrato(c))}</strong><br>À vista ref.: <strong>${vista}</strong>`;
+      cel.appendChild(info);
+    });
+  },0);
+};
+window.abrirPerfilAluno = abrirPerfilAluno;
