@@ -9453,3 +9453,921 @@ abrirPerfilAluno=async function(id){
   },0);
 };
 window.abrirPerfilAluno=abrirPerfilAluno;
+
+// ═══════════════════════════════════════════════════
+// V35 — FINANCEIRO / DRE AUDITÁVEL
+// 1) vínculo pagamento → contrato explícito e sugerido pela data
+// 2) receita avulsa sem aluno
+// 3) fonte única para receita de competência e caixa
+// 4) auditoria de integridade e rastreabilidade
+// 5) desativa migração automática de "Contrato inicial"
+// ═══════════════════════════════════════════════════
+const VERSAO_FINANCEIRO_V35 = '35.0';
+let receitasAvulsasV35 = [];
+
+// ──────────────────────────────────────────────────
+// CONTRATOS: NÃO CRIAR MAIS CONTRATO AUTOMATICAMENTE
+// ──────────────────────────────────────────────────
+carregarContratos = async function(){
+  try{
+    const snap = await getDocs(collection(db,'contratos'));
+    contratos = snap.docs.map(d=>({id:d.id,...d.data()}));
+  }catch(e){
+    contratos = [];
+    console.warn('Erro ao carregar contratos',e);
+  }
+  return contratos;
+};
+
+// Reforço de integridade: contrato arquivado nunca gera competência.
+const contratoContaCompetenciaMesBaseV35 = contratoContaCompetenciaMes;
+contratoContaCompetenciaMes = function(c,mes,ano){
+  if(!c || c.status==='excluido') return false;
+  return !!contratoContaCompetenciaMesBaseV35(c,mes,ano);
+};
+
+// ──────────────────────────────────────────────────
+// RECEITAS AVULSAS
+// ──────────────────────────────────────────────────
+async function carregarReceitasAvulsasV35(forcar=false){
+  if(receitasAvulsasV35.length && !forcar) return receitasAvulsasV35;
+  try{
+    const snap=await getDocs(collection(db,'receitas_avulsas'));
+    receitasAvulsasV35=snap.docs.map(d=>({id:d.id,...d.data()}));
+  }catch(e){
+    console.warn('Não foi possível carregar receitas avulsas:',e);
+    receitasAvulsasV35=[];
+  }
+  return receitasAvulsasV35;
+}
+async function salvarReceitaAvulsaV35(r){
+  receitasAvulsasV35=receitasAvulsasV35.filter(x=>String(x.id)!==String(r.id)).concat(r);
+  await setDoc(doc(db,'receitas_avulsas',String(r.id)),r);
+}
+function receitaAvulsaAtivaV35(r){ return !!r && r.status!=='excluido'; }
+function receitaAvulsaCompMesV35(r,mes,ano){
+  return receitaAvulsaAtivaV35(r) && String(r.competencia||'')===`${ano}-${String(Number(mes)+1).padStart(2,'0')}`;
+}
+function receitasAvulsasCompetenciaMesV35(mes,ano){
+  return receitasAvulsasV35.filter(r=>receitaAvulsaCompMesV35(r,mes,ano));
+}
+function receitasAvulsasCaixaMesV35(mes,ano){
+  return receitasAvulsasV35.filter(r=>receitaAvulsaAtivaV35(r)&&r.recebido===true&&r.dataRecebimento&&dataNoMesV32(r.dataRecebimento,mes,ano));
+}
+function categoriaReceitaAvulsaV35(cat){
+  return ({
+    servico_avulso:'Serviço / avaliação avulsa',
+    venda_produto:'Venda de produto',
+    receita_operacional:'Outra receita operacional',
+    receita_nao_operacional:'Receita não operacional',
+    outras:'Outras receitas'
+  })[cat]||cat||'Outras receitas';
+}
+
+// ──────────────────────────────────────────────────
+// FONTE ÚNICA DE RECEITAS — COMPETÊNCIA
+// ──────────────────────────────────────────────────
+function linhasReceitaCompetenciaV35(mes,ano){
+  const linhas=[];
+
+  contratos
+    .filter(c=>c.status!=='excluido'&&contratoContaCompetenciaMes(c,mes,ano))
+    .forEach(c=>{
+      const comp=competenciaContratoMesV28(c,mes,ano);
+      linhas.push({
+        tipo:'contrato',
+        origemId:String(c.id),
+        alunoId:String(c.alunoId||''),
+        alunoNome:c.alunoNome||'—',
+        descricao:nomeContrato(c),
+        detalhe:competenciaResumoContratoMesV18(c,mes,ano),
+        valor:Number(valorCompetenciaContratoMesV28(c,mes,ano)||0),
+        contrato:c,
+        competencia:comp?.data||`${ano}-${String(mes+1).padStart(2,'0')}-01`,
+        mes,ano
+      });
+    });
+
+  aulasExtrasMes(mes,ano).forEach(p=>{
+    linhas.push({
+      tipo:'aula_extra',
+      origemId:String(p.id),
+      alunoId:String(p.alunoId||''),
+      alunoNome:p.alunoNome||'—',
+      descricao:p.descricao||'Aula extra',
+      detalhe:`${fmtData(p.data)} · aula extra`,
+      valor:Number(p.valor||0),
+      pagamento:p,
+      contratoId:String(p.contratoId||''),
+      competencia:p.data,
+      mes,ano
+    });
+  });
+
+  multasMesV32(mes,ano).forEach(p=>{
+    linhas.push({
+      tipo:'multa_cancelamento',
+      origemId:String(p.id),
+      alunoId:String(p.alunoId||''),
+      alunoNome:p.alunoNome||'—',
+      descricao:p.descricao||'Multa rescisória',
+      detalhe:`${fmtData(p.data)} · multa registrada`,
+      valor:Number(p.valor||0),
+      pagamento:p,
+      contratoId:String(p.contratoId||''),
+      competencia:p.competenciaDRE||ymV32(p.data),
+      mes,ano
+    });
+  });
+
+  receitasAvulsasCompetenciaMesV35(mes,ano).forEach(r=>{
+    linhas.push({
+      tipo:'receita_avulsa',
+      origemId:String(r.id),
+      alunoId:'',
+      alunoNome:'Receita avulsa',
+      descricao:r.descricao||categoriaReceitaAvulsaV35(r.categoria),
+      detalhe:`${categoriaReceitaAvulsaV35(r.categoria)} · competência ${r.competencia}`,
+      valor:Number(r.valor||0),
+      receitaAvulsa:r,
+      competencia:r.competencia,
+      mes,ano
+    });
+  });
+
+  return linhas.filter(l=>Number(l.valor||0)!==0);
+}
+
+// FONTE ÚNICA DE RECEITAS — CAIXA
+function linhasReceitaCaixaV35(mes,ano){
+  const linhas=[];
+  movimentosAlunoCaixaMesV32(mes,ano).forEach(p=>{
+    const v=valorCaixaAlunoV32(p);
+    linhas.push({
+      tipo:'movimento_aluno',
+      subtipo:naturezaMovAlunoV32(p),
+      origemId:String(p.id),
+      alunoId:String(p.alunoId||''),
+      alunoNome:p.alunoNome||'—',
+      descricao:p.descricao||labelNaturezaV32(p),
+      detalhe:`${fmtData(p.data)} · ${p.forma||'—'}${detalheCartaoTexto(p)}`,
+      valor:Number(v||0),
+      pagamento:p,
+      contratoId:String(p.contratoId||''),
+      data:p.data
+    });
+  });
+  receitasAvulsasCaixaMesV35(mes,ano).forEach(r=>{
+    linhas.push({
+      tipo:'receita_avulsa',
+      origemId:String(r.id),
+      alunoId:'',
+      alunoNome:'Receita avulsa',
+      descricao:r.descricao||categoriaReceitaAvulsaV35(r.categoria),
+      detalhe:`${fmtData(r.dataRecebimento)} · ${r.forma||'—'} · ${categoriaReceitaAvulsaV35(r.categoria)}`,
+      valor:Number(r.valor||0),
+      receitaAvulsa:r,
+      data:r.dataRecebimento
+    });
+  });
+  return linhas.filter(l=>Number(l.valor||0)!==0);
+}
+
+// Todos os painéis passam a usar as mesmas composições.
+receitaMesEsp = function(mes,ano){
+  return linhasReceitaCompetenciaV35(mes,ano).reduce((s,l)=>s+Number(l.valor||0),0);
+};
+receitaCaixaMes = function(mes,ano){
+  return linhasReceitaCaixaV35(mes,ano).reduce((s,l)=>s+Number(l.valor||0),0);
+};
+receitaMensal = function(){ return receitaMesEsp(MES_ATUAL,ANO_ATUAL); };
+receitaDoMesSelecionada = function(mes,ano){
+  return financeiroModo==='caixa'?receitaCaixaMes(mes,ano):receitaMesEsp(mes,ano);
+};
+
+// Mantém os cards auxiliares corretos sem confundir "alunos" com receitas avulsas.
+function entradasReceitaCaixaV35(mes,ano){
+  return linhasReceitaCaixaV35(mes,ano).reduce((s,l)=>s+Math.max(0,Number(l.valor||0)),0);
+}
+function saidasReceitaCaixaV35(mes,ano){
+  return linhasReceitaCaixaV35(mes,ano).reduce((s,l)=>s+Math.max(0,-Number(l.valor||0)),0);
+}
+
+// ──────────────────────────────────────────────────
+// NOTA FISCAL: usa a mesma composição da DRE
+// ──────────────────────────────────────────────────
+itensReceitaCompetenciaNFV24 = function(mes,ano){
+  return linhasReceitaCompetenciaV35(mes,ano).map(l=>{
+    const tipoNF=l.tipo==='multa_cancelamento'?'multa_cancelamento':l.tipo;
+    return {
+      tipo:tipoNF,
+      origemId:l.origemId,
+      key:chaveNFV24(tipoNF,l.origemId,mes,ano),
+      alunoId:l.alunoId||'',
+      alunoNome:l.alunoNome||'—',
+      contrato:l.contrato,
+      descricao:l.descricao,
+      detalhe:l.detalhe,
+      valor:Number(l.valor||0),
+      pagamento:l.pagamento,
+      receitaAvulsa:l.receitaAvulsa,
+      mes,ano
+    };
+  });
+};
+
+// ──────────────────────────────────────────────────
+// RECEITA AVULSA — MODAL / CRUD
+// ──────────────────────────────────────────────────
+window.abrirModalReceitaAvulsaV35 = function(id=''){
+  const r=id?receitasAvulsasV35.find(x=>String(x.id)===String(id)):null;
+  const comp=r?.competencia||`${finAno}-${String(finMes+1).padStart(2,'0')}`;
+  const hoje=new Date().toISOString().split('T')[0];
+  const recebido=r?!!r.recebido:true;
+  const html=`<div style="position:fixed;inset:0;background:rgba(0,0,0,.58);z-index:700;display:flex;align-items:center;justify-content:center;padding:16px" id="modal-receita-avulsa-v35">
+    <div style="background:#fff;border-radius:12px;width:100%;max-width:560px;box-shadow:var(--shadow-lg);overflow:hidden">
+      <div style="padding:18px 22px;border-bottom:1px solid var(--borda);display:flex;justify-content:space-between;align-items:center">
+        <div><div style="font-family:'Bebas Neue',sans-serif;font-size:23px">${r?'Editar':'Nova'} receita avulsa</div><div style="font-size:12px;color:var(--texto-muted)">Não depende de aluno nem de contrato.</div></div>
+        <button class="modal-close" onclick="document.getElementById('modal-receita-avulsa-v35').remove()">✕</button>
+      </div>
+      <div style="padding:20px 22px">
+        <div class="form-grid" style="grid-template-columns:1fr 1fr">
+          <div class="form-group full"><label class="form-label">Descrição</label><input class="form-input" id="ra-desc-v35" value="${esc(r?.descricao||'')}" placeholder="Ex.: Avaliação externa"></div>
+          <div class="form-group"><label class="form-label">Categoria</label><select class="form-select" id="ra-cat-v35">
+            ${[
+              ['servico_avulso','Serviço / avaliação avulsa'],
+              ['venda_produto','Venda de produto'],
+              ['receita_operacional','Outra receita operacional'],
+              ['receita_nao_operacional','Receita não operacional'],
+              ['outras','Outras receitas']
+            ].map(([v,l])=>`<option value="${v}" ${(r?.categoria||'servico_avulso')===v?'selected':''}>${l}</option>`).join('')}
+          </select></div>
+          <div class="form-group"><label class="form-label">Valor líquido da receita (R$)</label><input class="form-input" type="number" step="0.01" id="ra-valor-v35" value="${Number(r?.valor||0)>0?Number(r.valor).toFixed(2):''}" placeholder="0,00"></div>
+          <div class="form-group"><label class="form-label">Competência da DRE</label><input class="form-input" type="month" id="ra-comp-v35" value="${esc(comp)}"><div class="form-hint">Define em qual mês a receita pertence à DRE.</div></div>
+          <div class="form-group"><label class="form-label">Recebimento</label><label style="display:flex;align-items:center;gap:8px;height:38px"><input type="checkbox" id="ra-recebido-v35" ${recebido?'checked':''} onchange="toggleReceitaAvulsaRecebidaV35()"> Dinheiro já entrou no caixa</label></div>
+          <div class="form-group" id="ra-data-group-v35"><label class="form-label">Data real do recebimento</label><input class="form-input" type="date" id="ra-data-v35" value="${esc(r?.dataRecebimento||hoje)}"><div class="form-hint">Define o mês do caixa.</div></div>
+          <div class="form-group" id="ra-forma-group-v35"><label class="form-label">Forma / conta</label><select class="form-select" id="ra-forma-v35"><option value="PIX" ${(r?.forma||'PIX')==='PIX'?'selected':''}>PIX</option><option value="Cartão" ${r?.forma==='Cartão'?'selected':''}>Cartão</option><option value="Dinheiro" ${r?.forma==='Dinheiro'?'selected':''}>Dinheiro</option><option value="Transferência" ${r?.forma==='Transferência'?'selected':''}>Transferência</option><option value="Outra" ${r?.forma==='Outra'?'selected':''}>Outra</option></select></div>
+          <div class="form-group full"><label class="form-label">Observação</label><input class="form-input" id="ra-obs-v35" value="${esc(r?.observacao||'')}"></div>
+        </div>
+        <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:11px 12px;font-size:12px;color:#1e40af;margin-top:10px">
+          <strong>Regra:</strong> competência e caixa são independentes. Ex.: competência julho + recebimento 05/08 → DRE em julho e caixa em agosto.
+        </div>
+      </div>
+      <div style="padding:14px 22px;border-top:1px solid var(--borda);display:flex;gap:8px;justify-content:flex-end;background:#fafafa">
+        ${r?`<button class="btn btn-danger" style="margin-right:auto" onclick="excluirReceitaAvulsaV35('${esc(r.id)}')">Excluir</button>`:''}
+        <button class="btn btn-ghost" onclick="document.getElementById('modal-receita-avulsa-v35').remove()">Cancelar</button>
+        <button class="btn btn-primary" onclick="salvarReceitaAvulsaFormV35('${esc(r?.id||'')}')">Salvar receita</button>
+      </div>
+    </div>
+  </div>`;
+  document.body.insertAdjacentHTML('beforeend',html);
+  toggleReceitaAvulsaRecebidaV35();
+};
+window.toggleReceitaAvulsaRecebidaV35=function(){
+  const on=!!document.getElementById('ra-recebido-v35')?.checked;
+  const d=document.getElementById('ra-data-group-v35'),f=document.getElementById('ra-forma-group-v35');
+  if(d)d.style.display=on?'':'none';
+  if(f)f.style.display=on?'':'none';
+};
+window.salvarReceitaAvulsaFormV35=async function(id=''){
+  const descricao=document.getElementById('ra-desc-v35')?.value.trim();
+  const valor=Number(document.getElementById('ra-valor-v35')?.value||0);
+  const competencia=document.getElementById('ra-comp-v35')?.value;
+  const recebido=!!document.getElementById('ra-recebido-v35')?.checked;
+  const dataRecebimento=recebido?document.getElementById('ra-data-v35')?.value:'';
+  if(!descricao||valor<=0||!competencia){
+    await mensagemSistemaV34('Informe descrição, valor e competência da receita.','Receita avulsa','alerta');
+    return;
+  }
+  if(recebido&&!dataRecebimento){
+    await mensagemSistemaV34('Informe a data real do recebimento.','Receita avulsa','alerta');
+    return;
+  }
+  const anterior=id?receitasAvulsasV35.find(x=>String(x.id)===String(id)):null;
+  const rid=id||`ra_${Date.now()}`;
+  const r={
+    ...(anterior||{}),
+    id:rid,
+    descricao,
+    categoria:document.getElementById('ra-cat-v35')?.value||'outras',
+    valor:arredV32(valor),
+    competencia,
+    recebido,
+    dataRecebimento:recebido?dataRecebimento:'',
+    forma:recebido?(document.getElementById('ra-forma-v35')?.value||'PIX'):'',
+    observacao:document.getElementById('ra-obs-v35')?.value.trim()||'',
+    status:'ativo',
+    origem:'lancamento_manual_financeiro',
+    criadoEm:anterior?.criadoEm||new Date().toISOString(),
+    atualizadoEm:new Date().toISOString(),
+    ts:anterior?.ts||Date.now()
+  };
+  try{
+    await salvarReceitaAvulsaV35(r);
+    await registrarAuditoria(id?'edicao_receita_avulsa':'receita_avulsa','financeiro','Financeiro',anterior||{},r);
+    document.getElementById('modal-receita-avulsa-v35')?.remove();
+    toast('Receita avulsa salva ✓');
+    renderFinanceiroView();
+  }catch(e){
+    console.error(e);
+    await mensagemSistemaV34('Não foi possível salvar a receita avulsa no banco.','Erro ao salvar','perigo');
+  }
+};
+window.excluirReceitaAvulsaV35=async function(id){
+  const r=receitasAvulsasV35.find(x=>String(x.id)===String(id));if(!r)return;
+  const ok=await confirmarSistemaV34(
+    `Excluir "${r.descricao}"?\n\nEla será removida tanto da competência quanto do caixa, se houver recebimento registrado.`,
+    'Excluir receita avulsa','perigo','Excluir'
+  );
+  if(!ok)return;
+  const novo={...r,status:'excluido',excluidoEm:new Date().toISOString(),atualizadoEm:new Date().toISOString()};
+  await salvarReceitaAvulsaV35(novo);
+  await registrarAuditoria('exclusao_receita_avulsa','financeiro','Financeiro',r,novo);
+  document.getElementById('modal-receita-avulsa-v35')?.remove();
+  toast('Receita avulsa excluída ✓');
+  renderFinanceiroView();
+};
+
+// ──────────────────────────────────────────────────
+// PAGAMENTO → CONTRATO: VISÍVEL + SUGESTÃO PELA DATA
+// ──────────────────────────────────────────────────
+function fimContratoParaVinculoV35(c){
+  if(c?.status==='cancelado'&&c?.cancelamento?.dataCancelamento) return c.cancelamento.dataCancelamento;
+  return c?.vencOriginal||c?.venc||'';
+}
+function contratoCobreDataV35(c,data){
+  if(!c||c.status==='excluido'||!data)return false;
+  const d=dataLocal(data),i=dataLocal(c.inicio),f=dataLocal(fimContratoParaVinculoV35(c));
+  return !!(d&&i&&f&&d>=i&&d<=f);
+}
+function contratosDaDataV35(alunoId,data){
+  return contratos
+    .filter(c=>String(c.alunoId)===String(alunoId)&&c.status!=='excluido'&&contratoCobreDataV35(c,data))
+    .sort((a,b)=>(dataLocal(a.inicio)?.getTime()||0)-(dataLocal(b.inicio)?.getTime()||0));
+}
+function statusCurtoContratoV35(c){
+  if(c.status==='cancelado')return 'Cancelado';
+  const s=statusContratoHistorico(c);
+  return s?.label||'Contrato';
+}
+function contratoLabelSelectV35(c){
+  return `${nomeContrato(c)} · ${fmtData(c.inicio)} → ${fmtData(fimContratoParaVinculoV35(c))} · ${statusCurtoContratoV35(c)}`;
+}
+function opcoesNaturezaContratoV35(c,selecionada='contrato'){
+  const op=[['contrato','Pagamento do contrato / mensalidade']];
+  const x=c?.cancelamento;
+  if(x){
+    op.push(['multa_cancelamento','Multa rescisória']);
+    if(Number(x.valorAReceber||0)>0)op.push(['acordo_cancelamento','Pagamento do acordo / saldo']);
+    if(Number(x.valorReembolsado||0)>0)op.push(['reembolso_cancelamento','Reembolso ao aluno']);
+  }
+  if(!op.some(o=>o[0]===selecionada)&&selecionada!=='aula_extra') op.push([selecionada,labelNaturezaV32(selecionada)]);
+  return op;
+}
+function valorSugeridoNaturezaV35(c,n){
+  if(!c)return 0;
+  if(n==='contrato')return saldoLiquidoContratoV34(c);
+  return sugestaoValorMovV32(c,n);
+}
+function brutoSugeridoPagamentoV35(c,n){
+  if(!c)return 0;
+  if(n==='contrato')return saldoBrutoContratoV34(c);
+  return valorSugeridoNaturezaV35(c,n);
+}
+window.atualizarSugestaoContratoPorDataV35=function(){
+  const alunoId=document.getElementById('pg-aluno-id-v35')?.value;
+  const data=document.getElementById('pg-data')?.value;
+  const atual=document.getElementById('pg-contrato-id')?.value;
+  const box=document.getElementById('pg-sugestao-contrato-v35');
+  if(!box)return;
+  const candidatos=contratosDaDataV35(alunoId,data);
+  if(candidatos.length===1){
+    const s=candidatos[0];
+    if(String(s.id)===String(atual)){
+      box.style.background='#f0fdf4';box.style.borderColor='#bbf7d0';box.style.color='#166534';
+      box.innerHTML=`✓ O contrato selecionado corresponde à data informada: <strong>${esc(nomeContrato(s))}</strong>.`;
+    }else{
+      box.style.background='#fffbeb';box.style.borderColor='#fde68a';box.style.color='#92400e';
+      box.innerHTML=`Contrato sugerido para ${fmtData(data)}: <strong>${esc(nomeContrato(s))}</strong>. <button type="button" class="btn btn-ghost btn-sm" style="margin-left:6px" onclick="usarContratoSugeridoV35('${esc(s.id)}')">Usar sugerido</button><div style="font-size:11px;margin-top:4px">O sistema não troca o vínculo silenciosamente.</div>`;
+    }
+  }else if(candidatos.length>1){
+    box.style.background='#fef2f2';box.style.borderColor='#fecaca';box.style.color='#991b1b';
+    box.innerHTML=`⚠ Existem <strong>${candidatos.length} contratos sobrepostos</strong> nesta data. Escolha manualmente o contrato correto. Isso também aparecerá na Auditoria Financeira.`;
+  }else{
+    box.style.background='#f9fafb';box.style.borderColor='var(--borda)';box.style.color='var(--texto-muted)';
+    box.innerHTML='Nenhum contrato cobre exatamente essa data. O vínculo selecionado será mantido e poderá ser confirmado no salvamento.';
+  }
+};
+window.usarContratoSugeridoV35=function(id){
+  const sel=document.getElementById('pg-contrato-id');if(!sel)return;
+  sel.value=String(id);
+  atualizarContratoPagamentoV35(true);
+};
+window.atualizarContratoPagamentoV35=function(forcarValor=true){
+  const sel=document.getElementById('pg-contrato-id'),cid=sel?.value,c=contratos.find(x=>String(x.id)===String(cid));
+  if(!c)return;
+  const resumo=document.getElementById('pg-contrato-resumo-v35');
+  if(resumo)resumo.innerHTML=`<strong>${esc(nomeContrato(c))}</strong><div style="font-size:11px;margin-top:3px">${fmtData(c.inicio)} → ${fmtData(fimContratoParaVinculoV35(c))} · ${esc(statusCurtoContratoV35(c))}</div><div style="font-size:11px;margin-top:3px">Bruto contrato ${fmtValor(valorTotalBrutoContratoV34(c))} · líquido/base DRE ${fmtValor(valorLiquidoContratoV34(c))}</div>`;
+  const nat=document.getElementById('pg-natureza');
+  const atual=nat?.value||'contrato';
+  const op=opcoesNaturezaContratoV35(c,atual);
+  if(nat){
+    nat.innerHTML=op.map(([v,l])=>`<option value="${v}" ${v===atual?'selected':''}>${l}</option>`).join('');
+    if(!op.some(o=>o[0]===atual))nat.value='contrato';
+  }
+  if(forcarValor){
+    const n=nat?.value||'contrato';
+    const v=valorSugeridoNaturezaV35(c,n);
+    const el=document.getElementById('pg-valor');
+    if(el&&v>0)el.value=Number(v).toFixed(2);
+    const bruto=document.getElementById('pg-valor-bruto');
+    if(bruto)bruto.value=Number(brutoSugeridoPagamentoV35(c,n)||v||0).toFixed(2);
+  }
+  atualizarNaturezaPagamentoV35(false);
+  atualizarSugestaoContratoPorDataV35();
+};
+window.atualizarNaturezaPagamentoV35=function(forcar=true){
+  const cid=document.getElementById('pg-contrato-id')?.value,c=contratos.find(x=>String(x.id)===String(cid));
+  const n=document.getElementById('pg-natureza')?.value||'contrato';
+  const hint=document.getElementById('pg-natureza-hint');if(hint)hint.textContent=hintNaturezaV32(n);
+  const desc=document.getElementById('pg-desc');if(desc&&desc.dataset.editando!=='1')desc.value=labelNaturezaV32(n);
+  if(forcar&&c){
+    const v=valorSugeridoNaturezaV35(c,n),el=document.getElementById('pg-valor');
+    if(el&&v>0)el.value=Number(v).toFixed(2);
+    const bruto=document.getElementById('pg-valor-bruto');
+    if(bruto)bruto.value=Number(brutoSugeridoPagamentoV35(c,n)||v||0).toFixed(2);
+  }
+  const forma=document.getElementById('pg-forma');
+  if(n==='reembolso_cancelamento'&&forma?.value==='Cartão')forma.value='PIX';
+  togglePgCartao();
+};
+window.abrirModalPagamentoContrato=function(alunoId,contratoId=null,pagamentoId=null){
+  const a=alunos.find(x=>String(x.id)===String(alunoId));if(!a)return;
+  const lista=contratos
+    .filter(c=>String(c.alunoId)===String(alunoId)&&c.status!=='excluido')
+    .sort((a,b)=>(dataLocal(b.inicio)?.getTime()||0)-(dataLocal(a.inicio)?.getTime()||0));
+  if(!lista.length){mensagemSistemaV34('Cadastre um contrato antes de lançar movimentação.','Sem contrato','alerta');return;}
+  const p=pagamentoId?pagamentos.find(x=>String(x.id)===String(pagamentoId)):null;
+  const dataInicial=p?.data||new Date().toISOString().split('T')[0];
+  const porData=contratosDaDataV35(alunoId,dataInicial);
+  const c=(p?lista.find(x=>String(x.id)===String(p.contratoId)):null)
+    || (contratoId?lista.find(x=>String(x.id)===String(contratoId)):null)
+    || (porData.length===1?porData[0]:null)
+    || contratoVigenteAluno(alunoId)
+    || lista[0];
+  const n0=naturezaMovAlunoV32(p);
+  const op=opcoesNaturezaContratoV35(c,n0);
+  const valor=p?.valor??valorSugeridoNaturezaV35(c,n0);
+  const forma=p?.forma||c.pgto||'PIX';
+  const bruto=p?.valorBruto??brutoSugeridoPagamentoV35(c,n0)??valor;
+  const html=`<div style="position:fixed;inset:0;background:rgba(0,0,0,.58);z-index:710;display:flex;align-items:center;justify-content:center;padding:16px" id="modal-pagamento-overlay">
+    <div style="background:#fff;border-radius:12px;width:100%;max-width:610px;box-shadow:var(--shadow-lg);max-height:94vh;overflow-y:auto">
+      <div style="padding:19px 22px;border-bottom:1px solid var(--borda);display:flex;justify-content:space-between">
+        <div><div style="font-family:'Bebas Neue',sans-serif;font-size:23px">${p?'Editar movimentação':'Registrar movimentação'}</div><div style="font-size:12px;color:var(--texto-muted)"><strong>${esc(a.nome)}</strong></div></div>
+        <button class="modal-close" onclick="document.getElementById('modal-pagamento-overlay').remove()">✕</button>
+      </div>
+      <div style="padding:20px 22px">
+        <input type="hidden" id="pg-aluno-id-v35" value="${esc(alunoId)}">
+        <div class="form-grid" style="grid-template-columns:1fr">
+          <div class="form-group">
+            <label class="form-label">Contrato de referência</label>
+            <select class="form-select" id="pg-contrato-id" onchange="atualizarContratoPagamentoV35(true)">
+              ${lista.map(ct=>`<option value="${esc(ct.id)}" ${String(ct.id)===String(c.id)?'selected':''}>${esc(contratoLabelSelectV35(ct))}</option>`).join('')}
+            </select>
+            <div id="pg-contrato-resumo-v35" style="margin-top:7px;padding:9px 10px;background:#f9fafb;border:1px solid var(--borda);border-radius:7px;font-size:12px"></div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Data real da movimentação</label>
+            <input class="form-input" type="date" id="pg-data" value="${esc(dataInicial)}" onchange="atualizarSugestaoContratoPorDataV35()">
+            <div class="form-hint">A data determina o caixa. Para pagamento normal, ela também é usada para sugerir o contrato correto.</div>
+            <div id="pg-sugestao-contrato-v35" style="margin-top:7px;padding:9px 10px;border:1px solid var(--borda);border-radius:7px;font-size:12px"></div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">O que este lançamento representa?</label>
+            <select class="form-select" id="pg-natureza" onchange="atualizarNaturezaPagamentoV35(true)">
+              ${op.map(([v,l])=>`<option value="${v}" ${v===n0?'selected':''}>${l}</option>`).join('')}
+            </select>
+            <div class="form-hint" id="pg-natureza-hint">${esc(hintNaturezaV32(n0))}</div>
+          </div>
+          <div class="form-group"><label class="form-label">Forma</label><select class="form-select" id="pg-forma" onchange="togglePgCartao()"><option value="PIX" ${forma==='PIX'?'selected':''}>PIX</option><option value="Cartão" ${forma==='Cartão'?'selected':''}>Cartão</option><option value="Dinheiro" ${forma==='Dinheiro'?'selected':''}>Dinheiro</option></select></div>
+          <div class="form-group" id="pg-bruto-group" style="display:none"><label class="form-label">Valor cobrado do aluno no cartão — bruto</label><input class="form-input" type="number" id="pg-valor-bruto" step="0.01" value="${Number(bruto||0)>0?Number(bruto).toFixed(2):''}" oninput="calcPgCartao()"></div>
+          <div class="form-group"><label class="form-label" id="pg-valor-label">Valor líquido efetivamente recebido (R$)</label><input class="form-input" type="number" id="pg-valor" step="0.01" value="${Number(valor||0).toFixed(2)}" oninput="calcPgCartao()"></div>
+          <div class="form-group" id="pg-cartao-resumo-group" style="display:none"><label class="form-label">Resumo do cartão</label><div class="form-input" id="pg-cartao-hint" style="background:#fff7ed;color:#92400e;min-height:40px;display:flex;align-items:center"></div></div>
+          <div class="form-group" id="pg-parcelas-group" style="display:none"><label class="form-label">Parcelamento do cliente</label><select class="form-select" id="pg-parcelas"><option value="">Não informado</option>${Array.from({length:12},(_,i)=>i+1).map(n=>`<option value="${n}" ${Number(p?.parcelas||c.parcelas)===n?'selected':''}>${n}x</option>`).join('')}</select><div class="form-hint">O líquido integral entra no caixa na data registrada.</div></div>
+          <div class="form-group"><label class="form-label">Descrição</label><input class="form-input" id="pg-desc" data-editando="${p?'1':'0'}" value="${esc(p?.descricao||labelNaturezaV32(n0))}"></div>
+        </div>
+        <div style="padding:10px 12px;margin-top:12px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;font-size:12px;color:#1e40af"><strong>Regra financeira:</strong> pagamento normal do contrato gera caixa, mas não cria uma segunda receita na DRE. A competência continua vindo exclusivamente do contrato.</div>
+      </div>
+      <div style="padding:14px 22px;border-top:1px solid var(--borda);display:flex;justify-content:flex-end;gap:8px;background:#fafafa">
+        <button class="btn btn-ghost" onclick="document.getElementById('modal-pagamento-overlay').remove()">Cancelar</button>
+        <button class="btn btn-primary" onclick="confirmarPagamentoContratoV35('${esc(alunoId)}','${esc(pagamentoId||'')}')">Salvar</button>
+      </div>
+    </div>
+  </div>`;
+  document.body.insertAdjacentHTML('beforeend',html);
+  togglePgCartao();
+  atualizarContratoPagamentoV35(false);
+};
+abrirModalPagamentoContrato=window.abrirModalPagamentoContrato;
+registrarPagamento=async function(id){abrirModalPagamentoContrato(id);};
+window.registrarPagamento=registrarPagamento;
+
+window.confirmarPagamentoContratoV35=async function(alunoId,pagamentoId=''){
+  const contratoId=document.getElementById('pg-contrato-id')?.value;
+  const c=contratos.find(x=>String(x.id)===String(contratoId)),a=alunos.find(x=>String(x.id)===String(alunoId));
+  if(!c||!a)return;
+  const data=document.getElementById('pg-data')?.value;
+  const valor=Number(document.getElementById('pg-valor')?.value||0);
+  const natureza=document.getElementById('pg-natureza')?.value||'contrato';
+  if(!data||valor<=0){
+    await mensagemSistemaV34('Informe data e valor.','Movimentação','alerta');return;
+  }
+
+  if(natureza==='contrato'&&!contratoCobreDataV35(c,data)){
+    const candidatos=contratosDaDataV35(alunoId,data);
+    let texto=`A data ${fmtData(data)} não pertence ao período do contrato selecionado:\n${nomeContrato(c)}.`;
+    if(candidatos.length===1)texto+=`\n\nContrato sugerido para a data: ${nomeContrato(candidatos[0])}.`;
+    texto+='\n\nDeseja manter o vínculo escolhido mesmo assim?';
+    const ok=await confirmarSistemaV34(texto,'Data fora do contrato','alerta','Manter vínculo');
+    if(!ok)return;
+  }
+
+  const existente=pagamentoId?pagamentos.find(p=>String(p.id)===String(pagamentoId)):null;
+  const forma=document.getElementById('pg-forma')?.value||'PIX';
+  const parcelas=forma==='Cartão'?(parseInt(document.getElementById('pg-parcelas')?.value)||null):null;
+  const valorBruto=forma==='Cartão'?(Number(document.getElementById('pg-valor-bruto')?.value||0)||null):null;
+  if(forma==='Cartão'&&valorBruto&&valorBruto<valor){
+    await mensagemSistemaV34('No cartão, o valor bruto não pode ser menor que o líquido recebido.','Confira o cartão','perigo');return;
+  }
+  const id=pagamentoId||`pg_${contratoId}_${Date.now()}`;
+  const pg={
+    ...(existente||{}),
+    id,
+    contratoId:String(contratoId),
+    alunoId:String(alunoId),
+    alunoNome:a.nome,
+    natureza,
+    valor:arredV32(valor),
+    valorLiquido:arredV32(valor),
+    valorBruto,
+    taxaCartaoValor:forma==='Cartão'&&valorBruto?arredV32(valorBruto-valor):null,
+    data,forma,parcelas,
+    descricao:document.getElementById('pg-desc')?.value.trim()||labelNaturezaV32(natureza),
+    direcaoCaixa:natureza==='reembolso_cancelamento'?'saida':'entrada',
+    impactaDRE:natureza==='multa_cancelamento',
+    competenciaDRE:natureza==='multa_cancelamento'?ymV32(data):'',
+    status:'ativo',
+    ts:existente?.ts||Date.now(),
+    criadoEm:existente?.criadoEm||new Date().toISOString(),
+    atualizadoEm:new Date().toISOString()
+  };
+  await salvarPagamentoDb(pg);
+  await registrarAuditoria(pagamentoId?'edicao_movimentacao_aluno':'movimentacao_aluno',alunoId,a.nome,existente||{},pg);
+  document.getElementById('modal-pagamento-overlay')?.remove();
+  toast(natureza==='reembolso_cancelamento'?'Reembolso registrado como saída de caixa ✓':'Movimentação salva ✓');
+  abrirPerfilAluno(alunoId);
+};
+window.confirmarPagamentoContrato=window.confirmarPagamentoContratoV35;
+window.confirmarPagamentoContratoV32=window.confirmarPagamentoContratoV35;
+
+// ──────────────────────────────────────────────────
+// RASTREABILIDADE DA RECEITA
+// ──────────────────────────────────────────────────
+function linhaReceitaPorOrigemV35(tipo,id,mes,ano,modo='competencia'){
+  const lista=modo==='caixa'?linhasReceitaCaixaV35(mes,ano):linhasReceitaCompetenciaV35(mes,ano);
+  return lista.find(l=>String(l.origemId)===String(id)&&(l.tipo===tipo||l.subtipo===tipo))||lista.find(l=>String(l.origemId)===String(id));
+}
+window.rastrearReceitaV35=function(tipo,id,mes,ano,modo='competencia'){
+  const l=linhaReceitaPorOrigemV35(tipo,id,Number(mes),Number(ano),modo);
+  if(!l){mensagemSistemaV34('A origem dessa linha não foi encontrada. Atualize o Financeiro e tente novamente.','Rastreamento','alerta');return;}
+  let corpo='';
+  if(l.tipo==='contrato'){
+    const c=l.contrato;
+    corpo=`<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:12px">
+      <div><strong>Aluno</strong><br>${esc(c.alunoNome||'—')}</div>
+      <div><strong>Status</strong><br>${esc(c.status||'ativo')}</div>
+      <div><strong>Contrato ID</strong><br><code>${esc(c.id)}</code></div>
+      <div><strong>Plano</strong><br>${esc(PLANO_LABEL[c.plano]||c.plano||'—')}</div>
+      <div><strong>Período</strong><br>${fmtData(c.inicio)} → ${fmtData(fimContratoParaVinculoV35(c))}</div>
+      <div><strong>Competência</strong><br>${esc(l.detalhe)}</div>
+      <div><strong>Valor bruto contrato</strong><br>${fmtValor(valorTotalBrutoContratoV34(c))}</div>
+      <div><strong>Valor líquido/base DRE</strong><br>${fmtValor(valorLiquidoContratoV34(c))}</div>
+      <div><strong>Valor desta competência</strong><br>${fmtValor(l.valor)}</div>
+      <div><strong>Origem</strong><br>${esc(c.origem||'cadastro do contrato')}</div>
+    </div>`;
+  }else if(l.receitaAvulsa){
+    const r=l.receitaAvulsa;
+    corpo=`<div style="font-size:12px;line-height:1.7"><strong>Receita avulsa ID:</strong> <code>${esc(r.id)}</code><br><strong>Descrição:</strong> ${esc(r.descricao)}<br><strong>Categoria:</strong> ${esc(categoriaReceitaAvulsaV35(r.categoria))}<br><strong>Competência:</strong> ${esc(r.competencia)}<br><strong>Valor:</strong> ${fmtValor(r.valor)}<br><strong>Recebida:</strong> ${r.recebido?'Sim':'Não'}${r.recebido?`<br><strong>Data do caixa:</strong> ${fmtData(r.dataRecebimento)} · ${esc(r.forma||'—')}`:''}</div>`;
+  }else if(l.pagamento){
+    const p=l.pagamento,c=contratos.find(x=>String(x.id)===String(p.contratoId));
+    corpo=`<div style="font-size:12px;line-height:1.7"><strong>Movimento ID:</strong> <code>${esc(p.id)}</code><br><strong>Aluno:</strong> ${esc(p.alunoNome||'—')}<br><strong>Natureza:</strong> ${esc(labelNaturezaV32(p))}<br><strong>Contrato ID:</strong> <code>${esc(p.contratoId||'—')}</code><br><strong>Contrato:</strong> ${esc(c?nomeContrato(c):'Não encontrado')}<br><strong>Data:</strong> ${fmtData(p.data)}<br><strong>Valor líquido:</strong> ${fmtValor(p.valor)}${p.valorBruto?`<br><strong>Bruto:</strong> ${fmtValor(p.valorBruto)}`:''}</div>`;
+  }
+  const html=`<div style="position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:720;display:flex;align-items:center;justify-content:center;padding:16px" id="modal-rastreio-v35"><div style="background:#fff;border-radius:12px;max-width:650px;width:100%;box-shadow:var(--shadow-lg)"><div style="padding:18px 22px;border-bottom:1px solid var(--borda);display:flex;justify-content:space-between"><div><div style="font-family:'Bebas Neue',sans-serif;font-size:23px">Rastrear composição</div><div style="font-size:12px;color:var(--texto-muted)">Cada centavo da DRE/caixa deve ter uma origem identificável.</div></div><button class="modal-close" onclick="document.getElementById('modal-rastreio-v35').remove()">✕</button></div><div style="padding:20px 22px">${corpo}</div><div style="padding:14px 22px;border-top:1px solid var(--borda);text-align:right"><button class="btn btn-primary" onclick="document.getElementById('modal-rastreio-v35').remove()">Fechar</button></div></div></div>`;
+  document.body.insertAdjacentHTML('beforeend',html);
+};
+
+// ──────────────────────────────────────────────────
+// AUDITORIA FINANCEIRA
+// ──────────────────────────────────────────────────
+function intervaloContratoAuditoriaV35(c){
+  const i=dataLocal(c?.inicio);
+  const f=dataLocal(fimContratoParaVinculoV35(c));
+  return {i,f};
+}
+function contratosSobrepostosV35(a,b){
+  const A=intervaloContratoAuditoriaV35(a),B=intervaloContratoAuditoriaV35(b);
+  return !!(A.i&&A.f&&B.i&&B.f&&A.i<=B.f&&B.i<=A.f);
+}
+function auditoriaFinanceiraV35(){
+  const problemas=[];
+  const validos=contratos.filter(c=>c.status!=='excluido');
+  const pagos=pagamentos.filter(p=>p.status!=='excluido');
+
+  validos.filter(c=>c.origem==='migracao_campos_antigos').forEach(c=>{
+    problemas.push({nivel:'alerta',tipo:'contrato_legado',titulo:'Contrato criado por migração antiga ainda ativo',detalhe:`${c.alunoNome||'—'} · ${nomeContrato(c)} · ID ${c.id}`,alunoId:c.alunoId,origemId:c.id});
+  });
+
+  const porAluno={};
+  validos.forEach(c=>(porAluno[String(c.alunoId||'')]=porAluno[String(c.alunoId||'')]||[]).push(c));
+  Object.values(porAluno).forEach(lista=>{
+    lista.sort((a,b)=>(dataLocal(a.inicio)?.getTime()||0)-(dataLocal(b.inicio)?.getTime()||0));
+    for(let i=0;i<lista.length;i++){
+      for(let j=i+1;j<lista.length;j++){
+        const a=lista[i],b=lista[j];
+        if(!contratosSobrepostosV35(a,b))continue;
+        const exato=String(a.inicio)===String(b.inicio)&&String(fimContratoParaVinculoV35(a))===String(fimContratoParaVinculoV35(b))&&String(a.plano)===String(b.plano)&&Math.abs(valorLiquidoContratoV34(a)-valorLiquidoContratoV34(b))<0.01;
+        problemas.push({
+          nivel:exato?'erro':'alerta',
+          tipo:exato?'contrato_duplicado':'contrato_sobreposto',
+          titulo:exato?'Possível contrato duplicado':'Contratos com períodos sobrepostos',
+          detalhe:`${a.alunoNome||b.alunoNome||'—'} · ${nomeContrato(a)} [${a.id}] × ${nomeContrato(b)} [${b.id}]`,
+          alunoId:a.alunoId,origemId:a.id,origemId2:b.id
+        });
+      }
+    }
+  });
+
+  const mapaContrato=new Map(contratos.map(c=>[String(c.id),c]));
+  pagos.forEach(p=>{
+    if(!p.contratoId){
+      problemas.push({nivel:'erro',tipo:'pagamento_sem_contrato',titulo:'Movimentação sem contratoId',detalhe:`${p.alunoNome||'—'} · ${fmtData(p.data)} · ${fmtValor(p.valor)} · ID ${p.id}`,alunoId:p.alunoId,origemId:p.id});
+      return;
+    }
+    const c=mapaContrato.get(String(p.contratoId));
+    if(!c){
+      problemas.push({nivel:'erro',tipo:'pagamento_orfao',titulo:'Movimentação aponta para contrato inexistente',detalhe:`${p.alunoNome||'—'} · pagamento ${p.id} → contrato ${p.contratoId}`,alunoId:p.alunoId,origemId:p.id});
+    }else{
+      if(c.status==='excluido'){
+        problemas.push({nivel:'alerta',tipo:'pagamento_contrato_excluido',titulo:'Movimentação vinculada a contrato arquivado',detalhe:`${p.alunoNome||'—'} · ${fmtData(p.data)} · contrato ${c.id}`,alunoId:p.alunoId,origemId:p.id});
+      }
+      if(String(c.alunoId)!==String(p.alunoId)){
+        problemas.push({nivel:'erro',tipo:'pagamento_aluno_divergente',titulo:'Aluno da movimentação diverge do contrato',detalhe:`Pagamento ${p.id}: aluno ${p.alunoId} · contrato ${c.id}: aluno ${c.alunoId}`,alunoId:p.alunoId,origemId:p.id});
+      }
+    }
+  });
+
+  const dupPg=new Map();
+  pagos.forEach(p=>{
+    const chave=[p.alunoId,p.contratoId,p.data,arredV32(Number(p.valor||0)),naturezaMovAlunoV32(p)].join('|');
+    if(!dupPg.has(chave))dupPg.set(chave,[]);
+    dupPg.get(chave).push(p);
+  });
+  dupPg.forEach(lista=>{
+    if(lista.length>1)problemas.push({nivel:'alerta',tipo:'pagamento_duplicado',titulo:'Possível movimentação duplicada',detalhe:`${lista[0].alunoNome||'—'} · ${fmtData(lista[0].data)} · ${fmtValor(lista[0].valor)} · IDs ${lista.map(x=>x.id).join(', ')}`,alunoId:lista[0].alunoId,origemId:lista[0].id});
+  });
+
+  receitasAvulsasV35.filter(receitaAvulsaAtivaV35).forEach(r=>{
+    if(!r.competencia||Number(r.valor||0)<=0)problemas.push({nivel:'erro',tipo:'receita_avulsa_invalida',titulo:'Receita avulsa incompleta',detalhe:`${r.descricao||r.id} · ID ${r.id}`,origemId:r.id});
+    if(r.recebido&&!r.dataRecebimento)problemas.push({nivel:'erro',tipo:'receita_avulsa_sem_data',titulo:'Receita recebida sem data de caixa',detalhe:`${r.descricao||r.id} · ID ${r.id}`,origemId:r.id});
+  });
+
+  // Garantia verificável: nenhum contrato excluído pode gerar linha no mês atual selecionado.
+  contratos.filter(c=>c.status==='excluido').forEach(c=>{
+    if(contratoContaCompetenciaMes(c,finMes,finAno)){
+      problemas.push({nivel:'erro',tipo:'competencia_contrato_excluido',titulo:'Contrato arquivado ainda impactando a DRE',detalhe:`${c.alunoNome||'—'} · ${c.id} · ${MESES_NOMES[finMes]} ${finAno}`,alunoId:c.alunoId,origemId:c.id});
+    }
+  });
+
+  return {
+    contratosValidos:validos.length,
+    contratosArquivados:contratos.filter(c=>c.status==='excluido').length,
+    pagamentosAtivos:pagos.length,
+    receitasAvulsasAtivas:receitasAvulsasV35.filter(receitaAvulsaAtivaV35).length,
+    problemas,
+    erros:problemas.filter(p=>p.nivel==='erro').length,
+    alertas:problemas.filter(p=>p.nivel==='alerta').length
+  };
+}
+function htmlAuditoriaFinanceiraV35(){
+  const a=auditoriaFinanceiraV35();
+  const cor=a.erros?'var(--vermelho)':a.alertas?'#b45309':'var(--verde)';
+  const titulo=a.erros?`${a.erros} erro(s) e ${a.alertas} alerta(s)`:a.alertas?`${a.alertas} alerta(s)`:'Nenhuma inconsistência detectada';
+  const rows=a.problemas.map(p=>`<tr><td><span class="badge" style="color:${p.nivel==='erro'?'var(--vermelho)':'#92400e'};background:${p.nivel==='erro'?'#fef2f2':'#fffbeb'}">${p.nivel==='erro'?'ERRO':'ALERTA'}</span></td><td><strong>${esc(p.titulo)}</strong><div style="font-size:11px;color:var(--texto-muted);margin-top:3px">${esc(p.detalhe)}</div></td><td style="text-align:right">${p.alunoId?`<button class="btn btn-ghost btn-sm" onclick="abrirPerfilAluno('${esc(p.alunoId)}')">Ver aluno</button>`:''}</td></tr>`).join('');
+  return `<div class="section-box" id="auditoria-financeira-v35" style="margin-top:24px;border-top:3px solid ${cor}">
+    <div class="section-header"><div><div class="section-title">Auditoria Financeira</div><div style="font-size:12px;color:var(--texto-muted)">Verifica contratos sobrepostos/duplicados, movimentos órfãos e dados que podem contaminar DRE ou caixa.</div></div><div style="text-align:right;font-size:12px"><strong style="color:${cor}">${esc(titulo)}</strong><div style="color:var(--texto-muted);margin-top:3px">${a.contratosValidos} contratos · ${a.pagamentosAtivos} movimentos · ${a.receitasAvulsasAtivas} receitas avulsas</div></div></div>
+    ${a.problemas.length?`<div class="table-wrap"><table><thead><tr><th>Nível</th><th>Inconsistência</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`:`<div style="padding:18px;color:var(--verde);font-weight:700">✓ Nenhuma inconsistência estrutural encontrada nos dados carregados.</div>`}
+  </div>`;
+}
+
+// ──────────────────────────────────────────────────
+// FINANCEIRO — DRE / CAIXA AUDITÁVEIS
+// ──────────────────────────────────────────────────
+renderFinanceiroView=async function(){
+  loading(true);
+  await Promise.all([carregarMovCaixa(),carregarReceitasAvulsasV35(),carregarNotasFiscaisV24()]);
+  const cats=await loadDespesas(finMes,finAno);
+  const despComp=totalDesp(cats),despCx=totalDespesaCaixaV32(finMes,finAno);
+  const linhasComp=linhasReceitaCompetenciaV35(finMes,finAno),linhasCx=linhasReceitaCaixaV35(finMes,finAno);
+  const recComp=linhasComp.reduce((s,l)=>s+Number(l.valor||0),0),recCx=linhasCx.reduce((s,l)=>s+Number(l.valor||0),0);
+  const rec=financeiroModo==='competencia'?recComp:recCx,desp=financeiroModo==='competencia'?despComp:despCx,res=rec-desp;
+
+  let linhasReceita='';
+  if(financeiroModo==='competencia'){
+    linhasReceita=linhasComp.map(l=>{
+      const nfItem={
+        tipo:l.tipo,origemId:l.origemId,key:chaveNFV24(l.tipo,l.origemId,finMes,finAno),
+        alunoId:l.alunoId||'',alunoNome:l.alunoNome||'—',contrato:l.contrato,
+        descricao:l.descricao,detalhe:l.detalhe,valor:l.valor,pagamento:l.pagamento,receitaAvulsa:l.receitaAvulsa,mes:finMes,ano:finAno
+      };
+      return `<tr>
+        <td><strong>${esc(l.alunoNome||'—')}</strong><div style="font-size:10px;color:var(--texto-muted);margin-top:3px">${esc(l.tipo)}</div></td>
+        <td>${esc(l.descricao)}<div style="font-size:11px;color:var(--texto-muted)">${esc(l.detalhe||'')}</div><div style="font-size:10px;color:#9ca3af;margin-top:3px">Origem: ${esc(l.tipo)} · ${esc(l.origemId)}</div></td>
+        <td style="text-align:right;color:var(--verde);font-weight:700">${fmtValor(l.valor)}</td>
+        <td style="text-align:center">${chipNFV24(nfItem)}</td>
+        <td style="text-align:right;white-space:nowrap"><button class="btn btn-ghost btn-sm" onclick="rastrearReceitaV35('${esc(l.tipo)}','${esc(l.origemId)}',${finMes},${finAno},'competencia')">🔎 Rastrear</button>${l.tipo==='receita_avulsa'?` <button class="btn btn-ghost btn-sm" onclick="abrirModalReceitaAvulsaV35('${esc(l.origemId)}')">✏️</button>`:''}</td>
+      </tr>`;
+    }).join('');
+  }else{
+    linhasReceita=linhasCx.map(l=>`<tr>
+      <td>${fmtData(l.data)}</td>
+      <td><strong>${esc(l.alunoNome||'—')}</strong><div style="font-size:12px">${esc(l.descricao)}</div><div style="font-size:11px;color:var(--texto-muted)">${esc(l.detalhe||'')}</div><div style="font-size:10px;color:#9ca3af;margin-top:3px">Origem: ${esc(l.tipo)} · ${esc(l.origemId)}</div></td>
+      <td style="text-align:right;font-weight:700;color:${Number(l.valor)<0?'var(--vermelho)':'var(--verde)'}">${Number(l.valor)<0?'-':''}${fmtValor(Math.abs(Number(l.valor)))}</td>
+      <td style="text-align:right;white-space:nowrap"><button class="btn btn-ghost btn-sm" onclick="rastrearReceitaV35('${esc(l.tipo)}','${esc(l.origemId)}',${finMes},${finAno},'caixa')">🔎 Rastrear</button>${l.tipo==='receita_avulsa'?` <button class="btn btn-ghost btn-sm" onclick="abrirModalReceitaAvulsaV35('${esc(l.origemId)}')">✏️</button>`:''}</td>
+    </tr>`).join('');
+  }
+
+  let linhasDesp='';
+  if(financeiroModo==='competencia'){
+    Object.entries(cats||{}).forEach(([cat,lista])=>(lista||[]).filter(d=>Number(d.valor)>0).forEach(d=>{
+      linhasDesp+=`<tr><td>${esc(d.desc)}<div style="font-size:11px;color:var(--texto-muted)">${esc(catLabelV32(cat))}</div></td><td style="text-align:right;font-weight:700">${fmtValor(d.valor)}</td></tr>`;
+    }));
+  }else{
+    movDespesasMesV32(finMes,finAno).forEach(m=>{
+      linhasDesp+=`<tr><td>${fmtData(m.data)}</td><td>${esc(m.descricao||'Despesa')}<div style="font-size:11px;color:var(--texto-muted)">Competência ${esc(m.competencia||'—')}${m.conta?` · ${esc(m.conta)}`:''}</div></td><td style="text-align:right;font-weight:700;color:var(--vermelho)">-${fmtValor(m.valor)}</td></tr>`;
+    });
+  }
+
+  const anual=[];
+  for(let m=0;m<12;m++){
+    const r=financeiroModo==='competencia'?receitaMesEsp(m,finAno):receitaCaixaMes(m,finAno);
+    const d=financeiroModo==='competencia'?totalDesp(await loadDespesas(m,finAno)):totalDespesaCaixaV32(m,finAno);
+    anual.push({m,r,d,res:r-d});
+  }
+  const ar=anual.reduce((s,x)=>s+x.r,0),ad=anual.reduce((s,x)=>s+x.d,0),ares=ar-ad;
+  const nfResumo=financeiroModo==='competencia'?resumoNotasFiscaisV24():null;
+
+  document.getElementById('content').innerHTML=`
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:12px">
+      <div class="mes-selector"><button class="mes-btn" onclick="navegarFin(-1)">◀</button><div class="mes-label">${MESES_NOMES[finMes]} ${finAno}</div><button class="mes-btn" onclick="navegarFin(1)">▶</button></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn ${financeiroModo==='competencia'?'btn-primary':'btn-ghost'} btn-sm" onclick="setModoFinanceiro('competencia')">Competência</button>
+        <button class="btn ${financeiroModo==='caixa'?'btn-primary':'btn-ghost'} btn-sm" onclick="setModoFinanceiro('caixa')">Caixa</button>
+        <button class="btn btn-success btn-sm" onclick="abrirModalReceitaAvulsaV35()">+ Receita avulsa</button>
+        <button class="btn btn-ghost btn-sm" onclick="setView('despesas')">✏️ Despesas / baixas</button>
+        <button class="btn btn-primary btn-sm" onclick="imprimirDREV35()">🖨️ Imprimir</button>
+      </div>
+    </div>
+
+    <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:12px 16px;font-size:13px;margin-bottom:20px">
+      <strong>${financeiroModo==='competencia'?'DRE por competência':'Caixa realizado'}.</strong>
+      ${financeiroModo==='competencia'
+        ?'Contrato gera competência pelo valor líquido do ciclo. Pagamento normal não gera segunda receita.'
+        :'Entram apenas recebimentos e saídas efetivamente registrados por data real.'}
+      Competência: <strong>${fmtValor(recComp)}</strong> · Caixa líquido: <strong>${recCx<0?'-':''}${fmtValor(Math.abs(recCx))}</strong>.
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:24px">
+      <div class="card" style="border-top:3px solid var(--verde)"><div class="card-label">${financeiroModo==='competencia'?'Receita DRE':'Entradas / saídas de receita'}</div><div class="card-value" style="font-size:24px;color:${rec>=0?'var(--verde)':'var(--vermelho)'}">${rec<0?'-':''}${fmtValor(Math.abs(rec))}</div><div class="card-sub">${financeiroModo==='competencia'?`${linhasComp.length} linha(s) com origem rastreável`:`Entradas ${fmtValor(entradasReceitaCaixaV35(finMes,finAno))} · saídas ${fmtValor(saidasReceitaCaixaV35(finMes,finAno))}`}</div></div>
+      <div class="card" style="border-top:3px solid var(--vermelho)"><div class="card-label">${financeiroModo==='competencia'?'Despesas DRE':'Despesas pagas no caixa'}</div><div class="card-value" style="font-size:24px;color:var(--vermelho)">${fmtValor(desp)}</div><div class="card-sub">${financeiroModo==='caixa'?`Competência do mês: ${fmtValor(despComp)}`:'competência cadastrada em Despesas'}</div></div>
+      <div class="card" style="border-top:3px solid ${res>=0?'var(--verde)':'var(--vermelho)'}"><div class="card-label">Resultado</div><div class="card-value" style="font-size:24px;color:${res>=0?'var(--verde)':'var(--vermelho)'}">${res<0?'-':''}${fmtValor(Math.abs(res))}</div><div class="card-sub">${financeiroModo==='competencia'?'resultado DRE':'caixa líquido realizado'}</div></div>
+    </div>
+
+    ${financeiroModo==='competencia'&&nfResumo?`<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:18px">
+      <div class="card" style="border-top:3px solid #b45309"><div class="card-label">Notas fiscais a emitir</div><div class="card-value" style="font-size:21px;color:#b45309">${fmtValor(nfResumo.valEmitir)}</div><div class="card-sub">${nfResumo.qtdEmitir} receita(s)</div></div>
+      <div class="card" style="border-top:3px solid var(--verde)"><div class="card-label">NF sem pendência</div><div class="card-value" style="font-size:21px;color:var(--verde)">${fmtValor(nfResumo.valEmitida)}</div><div class="card-sub">${nfResumo.qtdEmitida} receita(s)</div></div>
+    </div>`:''}
+
+    <div class="section-box" style="margin-bottom:24px">
+      <div class="section-header"><div><div class="section-title">${financeiroModo==='competencia'?'Receita — Competência':'Receitas / movimentos — Caixa'}</div><div style="font-size:12px;color:var(--texto-muted)">Cada linha mostra o ID da origem e pode ser rastreada.</div></div></div>
+      <div class="table-wrap"><table>
+        <thead><tr>${financeiroModo==='competencia'
+          ?'<th>Aluno / origem</th><th>Natureza / competência</th><th style="text-align:right">Valor</th><th style="text-align:center">NF</th><th></th>'
+          :'<th>Data</th><th>Origem / natureza</th><th style="text-align:right">Entrada / saída</th><th></th>'}</tr></thead>
+        <tbody>${linhasReceita||`<tr><td colspan="${financeiroModo==='competencia'?5:4}"><div class="empty">Nenhuma receita neste mês.</div></td></tr>`}</tbody>
+      </table></div>
+    </div>
+
+    <div class="section-box" style="margin-bottom:24px">
+      <div class="section-header"><div><div class="section-title">${financeiroModo==='competencia'?'Despesas por competência':'Despesas efetivamente pagas'}</div><div style="font-size:12px;color:var(--texto-muted)">${financeiroModo==='competencia'?'Origem: página Despesas.':'Origem: baixas reais das despesas.'}</div></div></div>
+      <div class="table-wrap"><table><thead><tr>${financeiroModo==='competencia'?'<th>Despesa</th><th style="text-align:right">Valor</th>':'<th>Data</th><th>Despesa</th><th style="text-align:right">Saída</th>'}</tr></thead><tbody>${linhasDesp||`<tr><td colspan="${financeiroModo==='competencia'?2:3}"><div class="empty">Nenhuma despesa.</div></td></tr>`}</tbody></table></div>
+    </div>
+
+    <div class="section-box">
+      <div class="section-header"><div><div class="section-title">${financeiroModo==='competencia'?'DRE anual — Competência':'Caixa realizado anual'} — ${finAno}</div><div style="font-size:12px;color:var(--texto-muted)">${financeiroModo==='competencia'?'Somente origens válidas de competência.':'Não projeta pagamentos futuros.'}</div></div><div style="font-size:12px;color:var(--texto-muted)">Rec: <strong style="color:var(--verde)">${fmtValor(ar)}</strong> · Desp: <strong style="color:var(--vermelho)">${fmtValor(ad)}</strong> · Res: <strong style="color:${ares>=0?'var(--verde)':'var(--vermelho)'}">${ares<0?'-':''}${fmtValor(Math.abs(ares))}</strong></div></div>
+      <div class="table-wrap"><table><thead><tr><th>Mês</th><th>Receita / entradas</th><th>Despesas</th><th>Resultado</th></tr></thead><tbody>${anual.map(x=>`<tr><td><strong>${MESES_ABREV[x.m]}</strong></td><td style="color:${x.r>=0?'var(--verde)':'var(--vermelho)'}">${x.r<0?'-':''}${fmtValor(Math.abs(x.r))}</td><td style="color:var(--vermelho)">${fmtValor(x.d)}</td><td style="font-weight:700;color:${x.res>=0?'var(--verde)':'var(--vermelho)'}">${x.res<0?'-':''}${fmtValor(Math.abs(x.res))}</td></tr>`).join('')}</tbody></table></div>
+    </div>
+
+    ${htmlAuditoriaFinanceiraV35()}
+  `;
+};
+window.renderFinanceiroView=renderFinanceiroView;
+
+// ──────────────────────────────────────────────────
+// IMPRESSÃO DRE / CAIXA V35
+// ──────────────────────────────────────────────────
+window.imprimirDREV35=async function(){
+  await carregarReceitasAvulsasV35();
+  const cats=await loadDespesas(finMes,finAno),modo=financeiroModo;
+  const linhas=modo==='competencia'?linhasReceitaCompetenciaV35(finMes,finAno):linhasReceitaCaixaV35(finMes,finAno);
+  const rec=linhas.reduce((s,l)=>s+Number(l.valor||0),0);
+  const desp=modo==='competencia'?totalDesp(cats):totalDespesaCaixaV32(finMes,finAno);
+  const res=rec-desp;
+  let lr='';
+  linhas.forEach(l=>{
+    lr+=`<tr><td>${esc(l.alunoNome||'—')} — ${esc(l.descricao)}<div class="sub">${esc(l.detalhe||'')} · origem ${esc(l.tipo)} / ${esc(l.origemId)}</div></td><td class="num" style="color:${Number(l.valor)<0?'#D32F2F':'#2e7d32'}">${Number(l.valor)<0?'-':''}${fmtValor(Math.abs(Number(l.valor)))}</td></tr>`;
+  });
+  let ld='';
+  if(modo==='competencia')Object.entries(cats||{}).forEach(([cat,lista])=>(lista||[]).filter(d=>Number(d.valor)>0).forEach(d=>ld+=`<tr><td>${esc(d.desc)}<div class="sub">${esc(catLabelV32(cat))}</div></td><td class="num">${fmtValor(d.valor)}</td></tr>`));
+  else movDespesasMesV32(finMes,finAno).forEach(m=>ld+=`<tr><td>${esc(m.descricao||'Despesa')}<div class="sub">${fmtData(m.data)} · competência ${esc(m.competencia||'—')}</div></td><td class="num">${fmtValor(m.valor)}</td></tr>`);
+
+  const titulo=modo==='competencia'?'DRE — Regime de Competência':'Resumo de Caixa Realizado';
+  const html=`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>${titulo}</title><style>body{font-family:Arial,sans-serif;max-width:800px;margin:auto;padding:30px;color:#111}h1{border-bottom:3px solid #111;padding-bottom:12px}h2{font-size:15px;background:#111;color:#fff;padding:8px;margin:22px 0 0}table{width:100%;border-collapse:collapse;border:1px solid #eee}td,th{padding:8px;border-bottom:1px solid #eee}.num{text-align:right;font-weight:700}.sub{font-size:10px;color:#777;margin-top:3px}.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:18px 0}.card{border:1px solid #ddd;border-radius:7px;padding:12px}.no-print{padding:10px 20px}@media print{.no-print{display:none}}</style></head><body><button class="no-print" onclick="window.print()">Imprimir / Salvar PDF</button><h1>Studio FB — ${titulo}</h1><div>${MESES_NOMES[finMes]} de ${finAno}</div><div class="cards"><div class="card"><small>Receita</small><div style="font-size:21px;color:#2e7d32">${rec<0?'-':''}${fmtValor(Math.abs(rec))}</div></div><div class="card"><small>Despesas</small><div style="font-size:21px;color:#D32F2F">${fmtValor(desp)}</div></div><div class="card"><small>Resultado</small><div style="font-size:21px;color:${res>=0?'#2e7d32':'#D32F2F'}">${res<0?'-':''}${fmtValor(Math.abs(res))}</div></div></div><h2>Receitas com origem</h2><table><tbody>${lr||'<tr><td>Nenhum registro.</td><td class="num">R$ 0,00</td></tr>'}</tbody></table><h2>Despesas</h2><table><tbody>${ld||'<tr><td>Nenhum registro.</td><td class="num">R$ 0,00</td></tr>'}</tbody></table><p style="font-size:11px;color:#666;margin-top:18px">${modo==='competencia'?'Pagamento normal não duplica receita: a competência contratual nasce somente do contrato.':'Caixa contém apenas datas reais de entradas e saídas registradas.'}</p></body></html>`;
+  const w=window.open('','_blank');
+  if(!w){mensagemSistemaV34('Libere pop-ups para imprimir.','Impressão bloqueada','alerta');return;}
+  w.document.write(html);w.document.close();
+};
+imprimirDRE=window.imprimirDREV35;
+
+// ──────────────────────────────────────────────────
+// DASHBOARD / CAIXA: receita avulsa entra nos totais
+// ──────────────────────────────────────────────────
+const renderDashboardBaseV35=renderDashboard;
+renderDashboard=async function(){
+  await carregarReceitasAvulsasV35();
+  return renderDashboardBaseV35();
+};
+window.renderDashboard=renderDashboard;
+
+const renderCaixaBaseV35=renderCaixaView;
+renderCaixaView=async function(){
+  await carregarReceitasAvulsasV35();
+  await renderCaixaBaseV35();
+  if(caixaVisao==='mensal'){
+    const box=[...document.querySelectorAll('#content .section-box')].find(el=>(el.querySelector('.section-title')?.textContent||'').toLowerCase().includes('receb'));
+    const av=receitasAvulsasCaixaMesV35(cxMes,cxAno);
+    if(box&&av.length&&!box.querySelector('.receitas-avulsas-caixa-v35')){
+      box.insertAdjacentHTML('beforeend',`<div class="receitas-avulsas-caixa-v35" style="padding:12px 16px;border-top:1px solid var(--borda);font-size:12px"><strong>Receitas avulsas recebidas:</strong> ${av.map(r=>`${esc(r.descricao)} (${fmtValor(r.valor)} em ${fmtData(r.dataRecebimento)})`).join(' · ')}</div>`);
+    }
+  }
+};
+window.renderCaixaView=renderCaixaView;
+
+// ──────────────────────────────────────────────────
+// INICIALIZAÇÃO: CARREGA RECEITAS AVULSAS ANTES DO DASHBOARD
+// ──────────────────────────────────────────────────
+init=async function(){
+  loading(true);
+  ensureCaixaMenu();
+  await carregarAlunos();
+  await carregarContratos();
+  await carregarPagamentos();
+  await carregarReceitasAvulsasV35();
+  await carregarPessoalV20();
+  hidratarAlunosComContratos();
+  await loadDespesas(MES_ATUAL,ANO_ATUAL);
+  renderDashboard();
+  setTimeout(()=>precarregarCaixaEmSegundoPlano(),600);
+};
+
+// ──────────────────────────────────────────────────
+// PERFIL: mostra o ID do contrato para conferência
+// ──────────────────────────────────────────────────
+const abrirPerfilBaseV35=abrirPerfilAluno;
+abrirPerfilAluno=async function(id){
+  await abrirPerfilBaseV35(id);
+  setTimeout(()=>{
+    document.querySelectorAll('[data-cancelamento-v29],.btn-cancelamento-v26').forEach(btn=>{
+      const cid=btn.dataset.cancelamentoV29||((btn.getAttribute('onclick')||'').match(/abrirModalCancelamentoV26\('[^']+','([^']+)'\)/)||[])[1];
+      const c=contratos.find(x=>String(x.id)===String(cid));
+      const td=btn.closest('td');
+      if(c&&td&&!td.querySelector('.contrato-id-v35')){
+        const el=document.createElement('div');
+        el.className='contrato-id-v35';
+        el.style.cssText='font-size:9.5px;color:#9ca3af;margin-top:4px';
+        el.textContent=`ID: ${c.id}`;
+        td.appendChild(el);
+      }
+    });
+  },0);
+};
+window.abrirPerfilAluno=abrirPerfilAluno;

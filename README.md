@@ -117,3 +117,70 @@ Exemplo:
 - multa de 15%: calculada sobre R$ 5.796,00
 
 A simulação de cancelamento pode ser impressa antes da confirmação e não altera contrato, DRE ou caixa.
+
+
+## Financeiro / DRE — V35
+
+A V35 torna a composição financeira rastreável e separa definitivamente as fontes.
+
+### Receita por competência
+
+A DRE usa uma única composição:
+
+- contrato ativo/cancelado válido → competência líquida do ciclo;
+- aula extra registrada → competência na data da aula;
+- multa rescisória registrada → competência na data do registro;
+- receita avulsa → competência informada manualmente.
+
+Pagamento normal de contrato **não gera uma segunda receita na DRE**. Ele afeta somente o caixa.
+
+### Caixa
+
+Entram no caixa:
+
+- pagamentos/movimentações dos alunos pela data real;
+- receitas avulsas marcadas como recebidas pela data real;
+- reembolsos como saída;
+- despesas somente quando houver baixa real.
+
+### Pagamento → contrato
+
+O modal mostra explicitamente o `contratoId`.
+
+Ao alterar a data de um pagamento normal, o sistema verifica qual contrato cobre aquela data e apenas **sugere** a troca. Nunca muda o vínculo silenciosamente.
+
+Se a data ficar fora do contrato escolhido, o sistema pede confirmação antes de salvar.
+
+### Receita avulsa
+
+Pode ser lançada sem aluno/contrato, com:
+
+- descrição;
+- categoria;
+- valor líquido;
+- competência;
+- recebido ou não;
+- data real do recebimento;
+- forma/conta.
+
+Excluir a receita avulsa remove automaticamente seu impacto tanto da competência quanto do caixa.
+
+### Auditoria financeira
+
+O Financeiro passa a verificar:
+
+- contrato de migração antiga ainda ativo;
+- contratos sobrepostos ou possivelmente duplicados;
+- pagamentos sem `contratoId`;
+- pagamentos apontando para contrato inexistente;
+- pagamentos ligados a contrato arquivado;
+- divergência de aluno entre pagamento e contrato;
+- possíveis pagamentos duplicados;
+- receita avulsa incompleta;
+- qualquer tentativa de competência de contrato arquivado.
+
+### Migração antiga desativada
+
+A rotina que criava automaticamente `Contrato inicial` a partir dos campos antigos do aluno foi removida do carregamento. A partir da V35, nenhum contrato é recriado automaticamente.
+
+O caso do aluno John deve ser usado como teste: se não houver contrato válido nem receita avulsa atribuível, nenhuma linha de competência dele deve existir. Se houver um contrato residual/duplicado, a DRE exibirá seu ID e a Auditoria Financeira apontará a origem.
