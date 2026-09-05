@@ -11217,7 +11217,7 @@ async function renderPerfilContaV37(id){
   await carregarTesourariaV37();await carregarMovCaixa();const c=contaTesV37(id),fim=dataFimMesV37(cxMes,cxAno),fis=saldosFisicosV37(fim),lanc=lancamentosContaV37(id,fim),conc=ultimaConciliacaoV37(fim),real=conc?.saldos?.[id],dif=real===undefined?null:Number(real)-Number(fis[id]||0);
   const rows=lanc.map(l=>`<tr><td>${fmtData(l.data)}</td><td><strong>${esc(l.descricao)}</strong><div style="font-size:10.5px;color:var(--texto-muted)">${esc(l.origem)}${l.alunoNome?` · ${esc(l.alunoNome)}`:''}${l.inferida?' · conta inferida':''}</div></td><td style="text-align:right;font-weight:700;color:${l.valor>=0?'var(--verde)':'var(--vermelho)'}">${l.valor>=0?'+':'-'}${fmtValor(Math.abs(l.valor))}</td></tr>`).join('');
   const ger=caixasCfgTesV37().filter(x=>x.local===id).map(x=>`<tr><td>${x.icon} ${esc(x.nome)}</td><td style="text-align:right">${fmtValor(saldoCaixinhaV37(x.id,fim))}</td></tr>`).join('');
-  document.getElementById('content').innerHTML=`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px"><div><button class="btn btn-ghost btn-sm" onclick="tesPerfilV37=null;renderCaixaView()">← Voltar ao Caixa</button><h2 style="margin:12px 0 0;font-family:'Bebas Neue';font-size:30px">${c.icon} ${esc(c.nome)}</h2></div><div style="display:flex;gap:8px"><button class="btn btn-ghost btn-sm" onclick="abrirConciliacaoV37('${fim}')">Conciliar</button><button class="btn btn-primary btn-sm" onclick="abrirTransferenciaTesV37('${id}')">Transferência</button></div></div><div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:20px"><div class="card"><div class="card-label">Saldo calculado</div><div class="card-value" style="font-size:26px">${fmtValor(fis[id]||0)}</div></div><div class="card"><div class="card-label">Saldo real informado</div><div class="card-value" style="font-size:26px">${real===undefined?'—':fmtValor(real)}</div><div class="card-sub">${conc?`posição ${fmtData(conc.data)}`:'sem conciliação'}</div></div><div class="card" style="border-top:3px solid ${dif===null?'var(--borda)':Math.abs(dif)<0.01?'var(--verde)':'var(--vermelho)'}"><div class="card-label">Diferença</div><div class="card-value" style="font-size:26px;color:${dif===null?'var(--texto-muted)':Math.abs(dif)<0.01?'var(--verde)':'var(--vermelho)'}">${dif===null?'—':moedaAssinadaV37(dif)}</div></div></div><div class="section-box" style="margin-bottom:18px"><div class="section-header"><div><div class="section-title">Composição gerencial hospedada aqui</div><div style="font-size:12px;color:var(--texto-muted)">Caixinhas são classificação gerencial; não são novas contas bancárias.</div></div></div><div class="table-wrap"><table><thead><tr><th>Caixinha</th><th style="text-align:right">Saldo gerencial</th></tr></thead><tbody>${ger||'<tr><td colspan="2"><div class="empty">Nenhuma caixinha configurada nesta posição.</div></td></tr>'}</tbody></table></div></div><div class="section-box"><div class="section-header"><div><div class="section-title">Movimentações físicas</div><div style="font-size:12px;color:var(--texto-muted)">Abertura em 31/08 + escrituração a partir de setembro.</div></div></div><div class="table-wrap"><table><thead><tr><th>Data</th><th>Movimento</th><th style="text-align:right">Valor</th></tr></thead><tbody>${rows||'<tr><td colspan="3"><div class="empty">Nenhuma movimentação depois da abertura.</div></td></tr>'}</tbody></table></div></div>`;
+  document.getElementById('content').innerHTML=`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px"><div><button class="btn btn-ghost btn-sm" onclick="voltarCaixaTesV374()">← Voltar ao Caixa</button><h2 style="margin:12px 0 0;font-family:'Bebas Neue';font-size:30px">${c.icon} ${esc(c.nome)}</h2></div><div style="display:flex;gap:8px"><button class="btn btn-ghost btn-sm" onclick="abrirConciliacaoV37('${fim}')">Conciliar</button><button class="btn btn-primary btn-sm" onclick="abrirTransferenciaTesV37('${id}')">Transferência</button></div></div><div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:20px"><div class="card"><div class="card-label">Saldo calculado</div><div class="card-value" style="font-size:26px">${fmtValor(fis[id]||0)}</div></div><div class="card"><div class="card-label">Saldo real informado</div><div class="card-value" style="font-size:26px">${real===undefined?'—':fmtValor(real)}</div><div class="card-sub">${conc?`posição ${fmtData(conc.data)}`:'sem conciliação'}</div></div><div class="card" style="border-top:3px solid ${dif===null?'var(--borda)':Math.abs(dif)<0.01?'var(--verde)':'var(--vermelho)'}"><div class="card-label">Diferença</div><div class="card-value" style="font-size:26px;color:${dif===null?'var(--texto-muted)':Math.abs(dif)<0.01?'var(--verde)':'var(--vermelho)'}">${dif===null?'—':moedaAssinadaV37(dif)}</div></div></div><div class="section-box" style="margin-bottom:18px"><div class="section-header"><div><div class="section-title">Composição gerencial hospedada aqui</div><div style="font-size:12px;color:var(--texto-muted)">Caixinhas são classificação gerencial; não são novas contas bancárias.</div></div></div><div class="table-wrap"><table><thead><tr><th>Caixinha</th><th style="text-align:right">Saldo gerencial</th></tr></thead><tbody>${ger||'<tr><td colspan="2"><div class="empty">Nenhuma caixinha configurada nesta posição.</div></td></tr>'}</tbody></table></div></div><div class="section-box"><div class="section-header"><div><div class="section-title">Movimentações físicas</div><div style="font-size:12px;color:var(--texto-muted)">Abertura em 31/08 + escrituração a partir de setembro.</div></div></div><div class="table-wrap"><table><thead><tr><th>Data</th><th>Movimento</th><th style="text-align:right">Valor</th></tr></thead><tbody>${rows||'<tr><td colspan="3"><div class="empty">Nenhuma movimentação depois da abertura.</div></td></tr>'}</tbody></table></div></div>`;
 }
 
 window.abrirPerfilCaixinhaV37=async function(id){tesPerfilV37={tipo:'caixa',id};await renderPerfilCaixinhaV37(id);};
@@ -11231,7 +11231,7 @@ async function renderPerfilCaixinhaV37(id){
     const mensal=Number(tesConfigV37?.manutencaoMensal||0),gasto=gastoGerencialMesV37('manutencao',cxMes,cxAno),movMes=mensal-gasto;
     especial=`<div class="section-box" style="margin-bottom:18px"><div class="section-header"><div><div class="section-title">Regra especial de manutenção</div><div style="font-size:12px;color:var(--texto-muted)">Orçamento mensal - gasto real = movimento sugerido da provisão.</div></div><button class="btn btn-ghost btn-sm" onclick="editarManutencaoMensalV37()">Editar orçamento</button></div><div style="padding:16px 24px;display:grid;grid-template-columns:repeat(4,1fr);gap:12px"><div><div class="card-label">Orçamento mensal</div><div style="font-family:'Bebas Neue';font-size:25px">${fmtValor(mensal)}</div></div><div><div class="card-label">Orçamento anual</div><div style="font-family:'Bebas Neue';font-size:25px">${fmtValor(mensal*12)}</div></div><div><div class="card-label">Gasto no mês</div><div style="font-family:'Bebas Neue';font-size:25px;color:var(--vermelho)">${fmtValor(gasto)}</div></div><div><div class="card-label">Movimento do mês</div><div style="font-family:'Bebas Neue';font-size:25px;color:${movMes>=0?'var(--verde)':'var(--vermelho)'}">${moedaAssinadaV37(movMes)}</div></div></div></div>`;
   }
-  document.getElementById('content').innerHTML=`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px"><div><button class="btn btn-ghost btn-sm" onclick="tesPerfilV37=null;renderCaixaView()">← Voltar ao Caixa</button><h2 style="margin:12px 0 0;font-family:'Bebas Neue';font-size:30px">${c.icon} ${esc(c.nome)}</h2><div style="font-size:12px;color:var(--texto-muted);max-width:720px">${esc(c.desc||'')}</div></div><button class="btn btn-primary btn-sm" onclick="abrirOperacaoGerencialV37('${id}')">+ Decisão gerencial</button></div><div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:20px"><div class="card"><div class="card-label">Saldo gerencial</div><div class="card-value" style="font-size:26px">${moedaAssinadaV37(saldo)}</div></div><div class="card"><div class="card-label">Necessário / alvo</div><div class="card-value" style="font-size:26px">${nec===null?'—':fmtValor(nec)}</div></div><div class="card"><div class="card-label">Diferença</div><div class="card-value" style="font-size:26px;color:${nec===null?'var(--texto-muted)':saldo>=nec?'var(--verde)':'var(--vermelho)'}">${nec===null?'—':moedaAssinadaV37(saldo-nec)}</div></div><div class="card"><div class="card-label">Hospedagem</div><div style="font-weight:700;margin-top:8px">${esc(contaTesV37(c.local).nome)}</div></div></div>${especial}<div class="section-box"><div class="section-header"><div><div class="section-title">Movimentações da caixinha</div><div style="font-size:12px;color:var(--texto-muted)">Inclui decisões e gastos reais atribuídos a esta origem gerencial.</div></div></div><div class="table-wrap"><table><thead><tr><th>Data</th><th>Movimento</th><th style="text-align:right">Valor</th></tr></thead><tbody>${rows||'<tr><td colspan="3"><div class="empty">Nenhuma movimentação.</div></td></tr>'}</tbody></table></div></div>`;
+  document.getElementById('content').innerHTML=`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px"><div><button class="btn btn-ghost btn-sm" onclick="voltarCaixaTesV374()">← Voltar ao Caixa</button><h2 style="margin:12px 0 0;font-family:'Bebas Neue';font-size:30px">${c.icon} ${esc(c.nome)}</h2><div style="font-size:12px;color:var(--texto-muted);max-width:720px">${esc(c.desc||'')}</div></div><button class="btn btn-primary btn-sm" onclick="abrirOperacaoGerencialV37('${id}')">+ Decisão gerencial</button></div><div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:20px"><div class="card"><div class="card-label">Saldo gerencial</div><div class="card-value" style="font-size:26px">${moedaAssinadaV37(saldo)}</div></div><div class="card"><div class="card-label">Necessário / alvo</div><div class="card-value" style="font-size:26px">${nec===null?'—':fmtValor(nec)}</div></div><div class="card"><div class="card-label">Diferença</div><div class="card-value" style="font-size:26px;color:${nec===null?'var(--texto-muted)':saldo>=nec?'var(--verde)':'var(--vermelho)'}">${nec===null?'—':moedaAssinadaV37(saldo-nec)}</div></div><div class="card"><div class="card-label">Hospedagem</div><div style="font-weight:700;margin-top:8px">${esc(contaTesV37(c.local).nome)}</div></div></div>${especial}<div class="section-box"><div class="section-header"><div><div class="section-title">Movimentações da caixinha</div><div style="font-size:12px;color:var(--texto-muted)">Inclui decisões e gastos reais atribuídos a esta origem gerencial.</div></div></div><div class="table-wrap"><table><thead><tr><th>Data</th><th>Movimento</th><th style="text-align:right">Valor</th></tr></thead><tbody>${rows||'<tr><td colspan="3"><div class="empty">Nenhuma movimentação.</div></td></tr>'}</tbody></table></div></div>`;
 }
 window.editarManutencaoMensalV37=async function(){
   const atual=Number(tesConfigV37?.manutencaoMensal||0);document.body.insertAdjacentHTML('beforeend',`<div class="overlay open" id="modal-man-v37" style="z-index:850"><div class="modal" style="max-width:430px"><div class="modal-header"><div class="modal-title">Orçamento mensal de manutenção</div><button class="modal-close" onclick="document.getElementById('modal-man-v37').remove()">✕</button></div><div class="modal-body"><div class="form-group"><label class="form-label">Valor mensal</label><input class="form-input" type="number" step="0.01" id="man-mensal-v37" value="${atual.toFixed(2)}"></div><div class="form-hint">O anual é mensal × 12. No fechamento, sobra acumula; excesso consome o acumulado.</div></div><div class="modal-footer"><button class="btn btn-primary" onclick="salvarManutencaoMensalV37()">Salvar</button></div></div></div>`);
@@ -11262,7 +11262,7 @@ renderCaixaView=async function(){
   const statusHtml=st.status==='fechado'?`<span class="badge badge-pago">FECHADO · V${Number(st.versao||0)}</span>`:st.status==='correcao'?'<span class="badge badge-pendente">EM CORREÇÃO</span>':'<span class="badge" style="background:#eff6ff;color:#1d4ed8">ABERTO</span>';
   const marco=cxMes===7&&cxAno===2026?`<span class="badge badge-pago" style="margin-left:6px">MARCO DRE CONFIÁVEL</span>`:'';
   document.getElementById('content').innerHTML=`
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:12px"><div><div class="mes-selector"><button class="mes-btn" onclick="cxMes--;if(cxMes<0){cxMes=11;cxAno--}renderCaixaView()">◀</button><div class="mes-label">${MESES_NOMES[cxMes]} ${cxAno}</div><button class="mes-btn" onclick="cxMes++;if(cxMes>11){cxMes=0;cxAno++}renderCaixaView()">▶</button></div><div style="margin-top:7px">${statusHtml}${marco}</div></div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-ghost btn-sm" onclick="abrirConfigTesV37()">⚙ Configurar</button><button class="btn btn-ghost btn-sm" onclick="abrirConciliacaoV37('${fim}')">✓ Conciliar contas</button><button class="btn btn-primary btn-sm" onclick="abrirDistribuicaoV37()">Distribuir / revisar</button><button class="btn btn-ghost btn-sm" onclick="abrirOperacaoGerencialV37()">+ Operação gerencial</button>${st.status==='fechado'?`<button class="btn btn-danger btn-sm" onclick="reabrirMesTesV37()">Reabrir</button>`:`<button class="btn btn-success btn-sm" onclick="fecharMesTesV37()">Fechar mês</button>`}</div></div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:12px"><div><div class="mes-selector"><button class="mes-btn" onclick="navegarCaixaTesV374(-1)">◀</button><div class="mes-label">${MESES_NOMES[cxMes]} ${cxAno}</div><button class="mes-btn" onclick="navegarCaixaTesV374(1)">▶</button></div><div style="margin-top:7px">${statusHtml}${marco}</div></div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-ghost btn-sm" onclick="abrirConfigTesV37()">⚙ Configurar</button><button class="btn btn-ghost btn-sm" onclick="abrirConciliacaoV37('${fim}')">✓ Conciliar contas</button><button class="btn btn-primary btn-sm" onclick="abrirDistribuicaoV37()">Distribuir / revisar</button><button class="btn btn-ghost btn-sm" onclick="abrirOperacaoGerencialV37()">+ Operação gerencial</button>${st.status==='fechado'?`<button class="btn btn-danger btn-sm" onclick="reabrirMesTesV37()">Reabrir</button>`:`<button class="btn btn-success btn-sm" onclick="fecharMesTesV37()">Fechar mês</button>`}</div></div>
     <div style="background:#f8fafc;border:1px solid var(--borda);border-radius:10px;padding:13px 16px;margin-bottom:18px;font-size:12px;display:flex;justify-content:space-between;gap:15px;flex-wrap:wrap"><div><strong>Escrituração física:</strong> abertura em 31/08/2026. Setembro em diante é reconstruído por entradas, saídas e transferências reais.</div><div><strong>Sugestão ≠ transação.</strong> Equalização só muda o saldo quando Fernando marcar a transferência como executada.</div></div>
     <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:20px"><div class="card" style="border-top:3px solid var(--verde)"><div class="card-label">Resultado DRE</div><div class="card-value" style="font-size:25px;color:${dreRes>=0?'var(--verde)':'var(--vermelho)'}">${moedaAssinadaV37(dreRes)}</div><div class="card-sub">Competência: rec. ${fmtValor(dreRec)} · desp. ${fmtValor(dreDesp)}</div></div><div class="card"><div class="card-label">Caixa físico total</div><div class="card-value" style="font-size:25px">${fmtValor(totalFis)}</div><div class="card-sub">Contas + espécie</div></div><div class="card" style="border-top:3px solid #92400e"><div class="card-label">Antecipados necessários</div><div class="card-value" style="font-size:25px;color:#92400e">${fmtValor(prov.total)}</div><div class="card-sub">Protegido ${fmtValor(ger.antecipados||0)} · falta ${fmtValor(Math.max(0,prov.total-Number(ger.antecipados||0)))}</div></div><div class="card" style="border-top:3px solid ${livre>=0?'var(--azul)':'var(--vermelho)'}"><div class="card-label">Caixa livre gerencial</div><div class="card-value" style="font-size:25px;color:${livre>=0?'var(--azul)':'var(--vermelho)'}">${moedaAssinadaV37(livre)}</div><div class="card-sub">Físico menos destinações registradas</div></div></div>
     <div class="section-box" style="margin-bottom:20px"><div class="section-header"><div><div class="section-title">Contas físicas</div><div style="font-size:12px;color:var(--texto-muted)">Clique para abrir o perfil, extrato e conciliação da conta.</div></div></div><div style="padding:16px 24px;display:grid;grid-template-columns:repeat(3,1fr);gap:14px">${contaCards}</div></div>
@@ -11320,7 +11320,7 @@ renderPerfilContaV37=async function(id){
   const lanc=lancamentosFisicosV37(fim).filter(l=>ids.includes(l.conta)).sort((a,b)=>(dataLocal(b.data)?.getTime()||0)-(dataLocal(a.data)?.getTime()||0));
   const rows=lanc.map(l=>`<tr><td>${fmtData(l.data)}</td><td>${esc(contaTesV37(l.conta).tipo==='investimento'?'Investimento':contaTesV37(l.conta).tipo==='corrente'?'Corrente':'Espécie')}</td><td><strong>${esc(l.descricao)}</strong><div style="font-size:10.5px;color:var(--texto-muted)">${esc(l.origem)}${l.alunoNome?` · ${esc(l.alunoNome)}`:''}${l.inferida?' · conta inferida':''}</div></td><td style="text-align:right;font-weight:700;color:${l.valor>=0?'var(--verde)':'var(--vermelho)'}">${l.valor>=0?'+':'-'}${fmtValor(Math.abs(l.valor))}</td></tr>`).join('');
   const ger=caixasCfgTesV37().filter(x=>ids.includes(x.local)).map(x=>`<tr><td>${x.icon} ${esc(x.nome)}</td><td>${esc(contaTesV37(x.local).tipo==='investimento'?'Investimento':'Corrente')}</td><td style="text-align:right">${moedaAssinadaV37(saldoCaixinhaV37(x.id,fim))}</td></tr>`).join('');
-  document.getElementById('content').innerHTML=`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:10px"><div><button class="btn btn-ghost btn-sm" onclick="tesPerfilV37=null;renderCaixaView()">← Voltar ao Caixa</button><h2 style="margin:12px 0 0;font-family:'Bebas Neue';font-size:30px">${base.icon} ${esc(base.instituicao)}</h2><div style="font-size:12px;color:var(--texto-muted)">${ids.length>1?'Visão consolidada de corrente e investimento.':'Controle do dinheiro físico em espécie.'}</div></div><div style="display:flex;gap:8px"><button class="btn btn-ghost btn-sm" onclick="abrirConciliacaoV37('${fim}')">Conciliar</button>${ids.length>1?`<button class="btn btn-primary btn-sm" onclick="abrirTransferenciaTesV37('${ids[0]}','${ids[1]}')">Transferência / aplicação</button>`:''}</div></div><div style="display:grid;grid-template-columns:${ids.length>1?'repeat(4,1fr)':'repeat(3,1fr)'};gap:14px;margin-bottom:20px"><div class="card" style="border-top:3px solid var(--azul)"><div class="card-label">Saldo total ${esc(base.instituicao)}</div><div class="card-value" style="font-size:26px">${fmtValor(total)}</div></div>${posCards}<div class="card" style="border-top:3px solid ${dif===null?'var(--borda)':Math.abs(dif)<.01?'var(--verde)':'var(--vermelho)'}"><div class="card-label">Diferença total</div><div class="card-value" style="font-size:26px;color:${dif===null?'var(--texto-muted)':Math.abs(dif)<.01?'var(--verde)':'var(--vermelho)'}">${dif===null?'—':moedaAssinadaV37(dif)}</div></div></div><div class="section-box" style="margin-bottom:18px"><div class="section-header"><div><div class="section-title">Composição gerencial hospedada na instituição</div><div style="font-size:12px;color:var(--texto-muted)">Mostra quais destinações estão na corrente ou no investimento.</div></div></div><div class="table-wrap"><table><thead><tr><th>Caixinha</th><th>Posição</th><th style="text-align:right">Saldo gerencial</th></tr></thead><tbody>${ger||'<tr><td colspan="3"><div class="empty">Nenhuma caixinha hospedada aqui.</div></td></tr>'}</tbody></table></div></div><div class="section-box"><div class="section-header"><div><div class="section-title">Extrato escritural</div><div style="font-size:12px;color:var(--texto-muted)">Entradas, saídas, aplicações, resgates e transferências reais.</div></div></div><div class="table-wrap"><table><thead><tr><th>Data</th><th>Posição</th><th>Movimento</th><th style="text-align:right">Valor</th></tr></thead><tbody>${rows||'<tr><td colspan="4"><div class="empty">Nenhuma movimentação depois da abertura.</div></td></tr>'}</tbody></table></div></div>`;
+  document.getElementById('content').innerHTML=`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:10px"><div><button class="btn btn-ghost btn-sm" onclick="voltarCaixaTesV374()">← Voltar ao Caixa</button><h2 style="margin:12px 0 0;font-family:'Bebas Neue';font-size:30px">${base.icon} ${esc(base.instituicao)}</h2><div style="font-size:12px;color:var(--texto-muted)">${ids.length>1?'Visão consolidada de corrente e investimento.':'Controle do dinheiro físico em espécie.'}</div></div><div style="display:flex;gap:8px"><button class="btn btn-ghost btn-sm" onclick="abrirConciliacaoV37('${fim}')">Conciliar</button>${ids.length>1?`<button class="btn btn-primary btn-sm" onclick="abrirTransferenciaTesV37('${ids[0]}','${ids[1]}')">Transferência / aplicação</button>`:''}</div></div><div style="display:grid;grid-template-columns:${ids.length>1?'repeat(4,1fr)':'repeat(3,1fr)'};gap:14px;margin-bottom:20px"><div class="card" style="border-top:3px solid var(--azul)"><div class="card-label">Saldo total ${esc(base.instituicao)}</div><div class="card-value" style="font-size:26px">${fmtValor(total)}</div></div>${posCards}<div class="card" style="border-top:3px solid ${dif===null?'var(--borda)':Math.abs(dif)<.01?'var(--verde)':'var(--vermelho)'}"><div class="card-label">Diferença total</div><div class="card-value" style="font-size:26px;color:${dif===null?'var(--texto-muted)':Math.abs(dif)<.01?'var(--verde)':'var(--vermelho)'}">${dif===null?'—':moedaAssinadaV37(dif)}</div></div></div><div class="section-box" style="margin-bottom:18px"><div class="section-header"><div><div class="section-title">Composição gerencial hospedada na instituição</div><div style="font-size:12px;color:var(--texto-muted)">Mostra quais destinações estão na corrente ou no investimento.</div></div></div><div class="table-wrap"><table><thead><tr><th>Caixinha</th><th>Posição</th><th style="text-align:right">Saldo gerencial</th></tr></thead><tbody>${ger||'<tr><td colspan="3"><div class="empty">Nenhuma caixinha hospedada aqui.</div></td></tr>'}</tbody></table></div></div><div class="section-box"><div class="section-header"><div><div class="section-title">Extrato escritural</div><div style="font-size:12px;color:var(--texto-muted)">Entradas, saídas, aplicações, resgates e transferências reais.</div></div></div><div class="table-wrap"><table><thead><tr><th>Data</th><th>Posição</th><th>Movimento</th><th style="text-align:right">Valor</th></tr></thead><tbody>${rows||'<tr><td colspan="4"><div class="empty">Nenhuma movimentação depois da abertura.</div></td></tr>'}</tbody></table></div></div>`;
   
 };
 
@@ -11482,4 +11482,96 @@ window.diagnosticoTesourariaV373 = function(){
     ? diagnosticoTesourariaV372()
     : {};
   return {...base,versao:VERSAO_TESOURARIA_V373,renderBlankFix:true};
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// V37.4 — NAVEGAÇÃO DA TESOURARIA
+//
+// app.js é um módulo ES. Variáveis declaradas com `let` (cxMes, cxAno,
+// tesPerfilV37) não ficam disponíveis para onclick inline no escopo global.
+// A V37 usava essas variáveis diretamente no HTML, então os botões de mês e
+// "Voltar ao Caixa" não conseguiam executar.
+//
+// A partir daqui toda navegação passa por funções públicas em window.
+// ═══════════════════════════════════════════════════════════════════════════════
+const VERSAO_TESOURARIA_V374 = '37.4';
+
+window.navegarCaixaTesV374 = async function(dir){
+  const passo = Number(dir) < 0 ? -1 : 1;
+
+  cxMes += passo;
+  if(cxMes < 0){
+    cxMes = 11;
+    cxAno -= 1;
+  }else if(cxMes > 11){
+    cxMes = 0;
+    cxAno += 1;
+  }
+
+  // Ao mudar o mês sempre voltamos para a visão geral,
+  // evitando um perfil antigo renderizado com referência temporal diferente.
+  tesPerfilV37 = null;
+
+  try{
+    await renderCaixaView();
+  }catch(e){
+    console.error('[Tesouraria V37.4] Falha ao mudar mês:',e);
+    const content=document.getElementById('content');
+    if(content){
+      content.innerHTML=htmlErroTesourariaV372(
+        'Não foi possível abrir o mês selecionado.',
+        e
+      );
+    }
+  }
+};
+
+window.voltarCaixaTesV374 = async function(){
+  tesPerfilV37 = null;
+  try{
+    await renderCaixaView();
+  }catch(e){
+    console.error('[Tesouraria V37.4] Falha ao voltar para o Caixa:',e);
+    const content=document.getElementById('content');
+    if(content){
+      content.innerHTML=htmlErroTesourariaV372(
+        'Não foi possível voltar para a visão geral do Caixa.',
+        e
+      );
+    }
+  }
+};
+
+// Atalhos úteis para navegação programática e futura manutenção.
+window.abrirMesCaixaTesV374 = async function(mes,ano){
+  const m=Number(mes),a=Number(ano);
+  if(!Number.isInteger(m)||m<0||m>11||!Number.isInteger(a)) return;
+  cxMes=m;
+  cxAno=a;
+  tesPerfilV37=null;
+  await renderCaixaView();
+};
+
+const setViewBaseV374 = setView;
+setView = function(v){
+  setViewBaseV374(v);
+  if(v==='caixa'){
+    const top=document.getElementById('topbar-right');
+    if(top) top.innerHTML='<span style="font-size:11px;color:var(--texto-muted);font-weight:700;letter-spacing:.6px">TESOURARIA · V37.4</span>';
+  }
+};
+window.setView=setView;
+
+window.diagnosticoTesourariaV374 = function(){
+  const base = typeof diagnosticoTesourariaV373 === 'function'
+    ? diagnosticoTesourariaV373()
+    : {};
+  return {
+    ...base,
+    versao:VERSAO_TESOURARIA_V374,
+    navegacaoGlobal:true,
+    mesAtual:cxMes,
+    anoAtual:cxAno,
+    perfilAberto:tesPerfilV37 ? {...tesPerfilV37} : null
+  };
 };

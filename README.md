@@ -52,3 +52,16 @@ A Tesouraria possui proteção de renderização: se uma leitura remota ou um bl
 Corrigido um conflito com a função legada `loading(false)`: após a Tesouraria montar o conteúdo, essa função limpava `#content`, deixando a página visualmente em branco apesar de não haver erro JavaScript.
 
 A correção foi aplicada à visão geral do Caixa e aos perfis de conta/caixinha.
+
+
+## V37.4 — navegação da Tesouraria
+
+Corrigida a navegação do novo Caixa:
+
+- mês anterior / próximo;
+- retorno de perfil de conta para a visão geral;
+- retorno de perfil de caixinha para a visão geral;
+- preservação do mês selecionado ao voltar;
+- mudança de mês retorna de forma segura à visão geral.
+
+A causa era o uso de variáveis internas de um módulo ES diretamente em `onclick` inline.

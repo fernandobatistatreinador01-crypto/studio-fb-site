@@ -31,3 +31,9 @@
 - Corrigida tela branca do Caixa/Tesouraria.
 - Removida a limpeza indevida de `#content` após o render.
 - Corrigidos também os perfis de contas e caixinhas.
+
+
+## V37.4
+- Corrigidos botões mês anterior/próximo do Caixa.
+- Corrigido botão Voltar ao Caixa nos perfis.
+- Navegação da Tesouraria passa por funções públicas, compatíveis com módulo ES.
