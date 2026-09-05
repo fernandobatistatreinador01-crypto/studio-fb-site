@@ -184,3 +184,43 @@ O Financeiro passa a verificar:
 A rotina que criava automaticamente `Contrato inicial` a partir dos campos antigos do aluno foi removida do carregamento. A partir da V35, nenhum contrato é recriado automaticamente.
 
 O caso do aluno John deve ser usado como teste: se não houver contrato válido nem receita avulsa atribuível, nenhuma linha de competência dele deve existir. Se houver um contrato residual/duplicado, a DRE exibirá seu ID e a Auditoria Financeira apontará a origem.
+
+
+## Integridade de exclusão — V36
+
+A V36 formaliza que **excluir** e **cancelar** são operações diferentes.
+
+### Contrato cancelado
+
+Um contrato cancelado foi real. Por isso:
+
+- mantém as competências válidas enquanto esteve vigente;
+- deixa de gerar competências depois do corte do cancelamento;
+- multa, acordo e reembolso só impactam o financeiro quando Fernando registra a movimentação real;
+- o histórico de cancelamento permanece acessível.
+
+### Contrato excluído
+
+Um contrato excluído representa erro, teste ou cadastro que não deve existir financeiramente.
+
+Ao excluir:
+
+- o documento do contrato é mantido no Firebase com `status: "excluido"`;
+- o contrato deixa de gerar qualquer competência;
+- o contrato deixa de ter saldo/provisão;
+- movimentos da coleção `pagamentos` vinculados ao contrato são marcados como `status: "excluido"` e `excluidoPorContrato: true`;
+- esses movimentos deixam de entrar em caixa, cartão, aula extra, multa, acordo ou reembolso;
+- todos os registros permanecem preservados para auditoria.
+
+A exclusão é feita em batch para evitar contrato excluído com pagamentos ainda ativos.
+
+### Auditoria
+
+A V36 também detecta:
+
+- contrato ativo cujo `alunoId` não corresponde a nenhum aluno atual;
+- contrato iniciado antes da data de entrada cadastrada do aluno.
+
+O botão `Rastrear` de uma receita contratual passa a exibir `Aluno ID`, `Contrato ID` e a ação **Excluir este contrato**.
+
+Isso permite corrigir registros antigos, como contratos de teste que não aparecem mais no perfil atual do aluno.

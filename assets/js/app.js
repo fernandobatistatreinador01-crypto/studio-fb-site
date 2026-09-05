@@ -10371,3 +10371,372 @@ abrirPerfilAluno=async function(id){
   },0);
 };
 window.abrirPerfilAluno=abrirPerfilAluno;
+
+// ═══════════════════════════════════════════════════
+// V36 — EXCLUSÃO REAL ≠ CANCELAMENTO
+//
+// CANCELADO:
+// - contrato existiu;
+// - mantém competências válidas até o cancelamento;
+// - movimentos posteriores só entram quando registrados.
+//
+// EXCLUÍDO:
+// - preservado apenas para auditoria;
+// - zero DRE;
+// - zero caixa;
+// - zero saldo/provisão;
+// - movimentos vinculados são desconsiderados.
+// ═══════════════════════════════════════════════════
+const VERSAO_INTEGRIDADE_V36 = '36.0';
+
+function contratoExcluidoV36(c){
+  return !!c && c.status === 'excluido';
+}
+function contratoPorIdV36(id){
+  return contratos.find(c=>String(c.id)===String(id)) || null;
+}
+function pagamentoFinanceiroValidoV36(p){
+  if(!p || p.status==='excluido') return false;
+  if(!p.contratoId) return true;
+  const c=contratoPorIdV36(p.contratoId);
+  // Movimento órfão continua visível/auditável. Somente contrato explicitamente
+  // excluído invalida automaticamente o movimento financeiro.
+  if(c && contratoExcluidoV36(c)) return false;
+  return true;
+}
+
+// ──────────────────────────────────────────────────
+// FILTRO CENTRAL: CONTRATO EXCLUÍDO NÃO PARTICIPA
+// ──────────────────────────────────────────────────
+pagamentosDoContrato = function(contratoId){
+  const c=contratoPorIdV36(contratoId);
+  if(c && contratoExcluidoV36(c)) return [];
+  return pagamentos
+    .filter(p=>String(p.contratoId)===String(contratoId) && pagamentoFinanceiroValidoV36(p) && naturezaQuitaContratoV32(p))
+    .sort((a,b)=>(dataLocal(a.data)?.getTime()||0)-(dataLocal(b.data)?.getTime()||0));
+};
+pagamentosDoAluno = function(alunoId){
+  return pagamentos
+    .filter(p=>String(p.alunoId)===String(alunoId) && pagamentoFinanceiroValidoV36(p))
+    .sort((a,b)=>(dataLocal(b.data)?.getTime()||0)-(dataLocal(a.data)?.getTime()||0));
+};
+totalPagoContrato = function(contratoId){
+  return pagamentosDoContrato(contratoId).reduce((s,p)=>s+Number(p.valor||0),0);
+};
+aulasExtrasMes = function(mes,ano){
+  return pagamentos.filter(p=>pagamentoFinanceiroValidoV36(p) && isAulaExtraPagamento(p) && dataNoMesV32(p.data,mes,ano));
+};
+pagamentosCartaoMes = function(mes,ano){
+  return pagamentos.filter(p=>pagamentoFinanceiroValidoV36(p) && p.forma==='Cartão' && dataNoMesV32(p.data,mes,ano));
+};
+movimentosAlunoCaixaMesV32 = function(mes,ano){
+  return pagamentos
+    .filter(p=>pagamentoFinanceiroValidoV36(p) && p.data && dataNoMesV32(p.data,mes,ano))
+    .filter(p=>['contrato','multa_cancelamento','acordo_cancelamento','reembolso_cancelamento'].includes(naturezaMovAlunoV32(p)));
+};
+multasMesV32 = function(mes,ano){
+  return movimentosAlunoCaixaMesV32(mes,ano).filter(p=>naturezaMovAlunoV32(p)==='multa_cancelamento');
+};
+somaNaturezaContratoV32 = function(c,n){
+  if(!c || contratoExcluidoV36(c)) return 0;
+  return pagamentos
+    .filter(p=>pagamentoFinanceiroValidoV36(p) && String(p.contratoId)===String(c.id) && naturezaMovAlunoV32(p)===n)
+    .reduce((s,p)=>s+Number(p.valor||0),0);
+};
+movsPosCancelV32 = function(c){
+  if(!c || contratoExcluidoV36(c)) return [];
+  return pagamentos
+    .filter(p=>pagamentoFinanceiroValidoV36(p) && String(p.contratoId)===String(c.id) && ['multa_cancelamento','acordo_cancelamento','reembolso_cancelamento'].includes(naturezaMovAlunoV32(p)))
+    .sort((a,b)=>(dataLocal(a.data)?.getTime()||0)-(dataLocal(b.data)?.getTime()||0));
+};
+
+// Saldo bruto/líquido também zera para contrato excluído.
+const saldoBrutoContratoBaseV36 = saldoBrutoContratoV34;
+saldoBrutoContratoV34 = function(c){
+  if(!c || contratoExcluidoV36(c)) return 0;
+  return saldoBrutoContratoBaseV36(c);
+};
+const saldoLiquidoContratoBaseV36 = saldoLiquidoContratoV34;
+saldoLiquidoContratoV34 = function(c){
+  if(!c || contratoExcluidoV36(c)) return 0;
+  return saldoLiquidoContratoBaseV36(c);
+};
+saldoContrato = function(c){
+  if(!c || contratoExcluidoV36(c)) return 0;
+  return saldoBrutoContratoV34(c);
+};
+
+// Competência: reforço final.
+const contratoContaCompetenciaMesBaseV36 = contratoContaCompetenciaMes;
+contratoContaCompetenciaMes = function(c,mes,ano){
+  if(!c || contratoExcluidoV36(c)) return false;
+  return !!contratoContaCompetenciaMesBaseV36(c,mes,ano);
+};
+
+// ──────────────────────────────────────────────────
+// EXCLUSÃO: GRAVA NO FIREBASE E NEUTRALIZA MOVIMENTOS
+// ──────────────────────────────────────────────────
+async function excluirContratoV36(alunoId,contratoId){
+  const c=contratoPorIdV36(contratoId);
+  if(!c){
+    await mensagemSistemaV34('Contrato não encontrado. Atualize a página e tente novamente.','Excluir contrato','alerta');
+    return;
+  }
+  if(c.status==='cancelado'){
+    await mensagemSistemaV34(
+      'Este contrato está CANCELADO, não excluído.\n\nCancelamento preserva as competências reais do período em que o contrato existiu. Se o cancelamento foi feito por engano, trate o caso pela auditoria antes de apagar qualquer histórico.',
+      'Contrato cancelado',
+      'alerta'
+    );
+    return;
+  }
+  if(c.status==='excluido'){
+    await mensagemSistemaV34('Este contrato já está marcado como excluído e não participa dos cálculos financeiros.','Contrato já excluído','info');
+    return;
+  }
+
+  const vinculados=pagamentos.filter(p=>String(p.contratoId)===String(contratoId) && p.status!=='excluido');
+  const ok=await confirmarSistemaV34(
+    `Excluir definitivamente este contrato dos cálculos?\n\n${c.alunoNome||'Aluno'} — ${nomeContrato(c)}\n${fmtData(c.inicio)} → ${fmtData(c.vencOriginal||c.venc)}\n\nConsequências:\n• zero impacto na DRE;\n• zero impacto no caixa;\n• zero saldo/provisão;\n• ${vinculados.length} movimentação(ões) vinculada(s) também será(ão) desconsiderada(s);\n• os registros continuam preservados para auditoria.\n\nIsso é diferente de cancelar um contrato real.`,
+    'Excluir contrato',
+    'perigo',
+    'Excluir dos cálculos'
+  );
+  if(!ok)return;
+
+  const agora=new Date().toISOString();
+  const antes={...c};
+  const novoContrato={
+    ...c,
+    status:'excluido',
+    excluidoEm:agora,
+    motivoExclusao:'exclusao_manual_contrato',
+    financeiroDesconsiderado:true,
+    atualizadoEm:agora
+  };
+
+  try{
+    const batch=writeBatch(db);
+    batch.set(doc(db,'contratos',String(contratoId)),novoContrato);
+
+    const idsMov=[];
+    vinculados.forEach(p=>{
+      const novoPg={
+        ...p,
+        statusAnteriorExclusaoContrato:p.status||'ativo',
+        status:'excluido',
+        excluidoEm:agora,
+        excluidoPorContrato:true,
+        contratoExcluidoId:String(contratoId),
+        atualizadoEm:agora
+      };
+      batch.set(doc(db,'pagamentos',String(p.id)),novoPg);
+      idsMov.push(String(p.id));
+    });
+
+    await batch.commit();
+
+    contratos=contratos.map(x=>String(x.id)===String(contratoId)?novoContrato:x);
+    pagamentos=pagamentos.map(p=>{
+      if(String(p.contratoId)!==String(contratoId) || p.status==='excluido') return p;
+      return {
+        ...p,
+        statusAnteriorExclusaoContrato:p.status||'ativo',
+        status:'excluido',
+        excluidoEm:agora,
+        excluidoPorContrato:true,
+        contratoExcluidoId:String(contratoId),
+        atualizadoEm:agora
+      };
+    });
+    hidratarAlunosComContratos();
+
+    await registrarAuditoria(
+      'exclusao_contrato',
+      String(alunoId||c.alunoId||''),
+      c.alunoNome||'Contrato',
+      antes,
+      {
+        status:'excluido',
+        financeiroDesconsiderado:true,
+        pagamentosDesconsiderados:idsMov,
+        quantidadePagamentosDesconsiderados:idsMov.length
+      }
+    );
+
+    document.getElementById('modal-rastreio-v35')?.remove();
+    document.getElementById('modal-sistema-v34')?.remove();
+
+    toast(`Contrato excluído dos cálculos${idsMov.length?` · ${idsMov.length} movimento(s) desconsiderado(s)`:''} ✓`);
+
+    if(viewAtual==='financeiro') await renderFinanceiroView();
+    else if(viewAtual==='caixa') await renderCaixaView();
+    else if(viewAtual==='dashboard') await renderDashboard();
+    else if(alunoId && alunos.some(a=>String(a.id)===String(alunoId))) await abrirPerfilAluno(alunoId);
+    else render();
+  }catch(e){
+    console.error('Falha ao excluir contrato V36:',e);
+    await mensagemSistemaV34(
+      'Não foi possível concluir a exclusão no Firebase. Nenhuma exclusão parcial deve ser considerada válida. Atualize a página e confira o status antes de tentar novamente.',
+      'Erro ao excluir contrato',
+      'perigo'
+    );
+  }
+}
+window.excluirContratoV36=excluirContratoV36;
+excluirContrato=excluirContratoV36;
+window.excluirContrato=excluirContratoV36;
+
+// ──────────────────────────────────────────────────
+// RASTREAR: MOSTRA IDs + AÇÃO DE EXCLUSÃO
+// ──────────────────────────────────────────────────
+const rastrearReceitaBaseV36=window.rastrearReceitaV35;
+window.rastrearReceitaV35=function(tipo,id,mes,ano,modo='competencia'){
+  rastrearReceitaBaseV36(tipo,id,mes,ano,modo);
+  setTimeout(()=>{
+    const modal=document.getElementById('modal-rastreio-v35');
+    if(!modal)return;
+    const l=linhaReceitaPorOrigemV35(tipo,id,Number(mes),Number(ano),modo);
+    if(!l || l.tipo!=='contrato' || !l.contrato)return;
+    const c=l.contrato;
+
+    const corpo=modal.querySelector('div[style*="padding:20px 22px"]');
+    if(corpo && !corpo.querySelector('.ids-v36')){
+      corpo.insertAdjacentHTML('afterbegin',`
+        <div class="ids-v36" style="background:#f9fafb;border:1px solid var(--borda);border-radius:7px;padding:10px 12px;margin-bottom:14px;font-size:11px">
+          <strong>Aluno ID:</strong> <code>${esc(String(c.alunoId||'—'))}</code><br>
+          <strong>Contrato ID:</strong> <code>${esc(String(c.id||'—'))}</code>
+        </div>`);
+    }
+
+    const footer=modal.querySelector('div[style*="border-top"]');
+    if(footer && !footer.querySelector('.btn-excluir-rastreio-v36') && c.status!=='excluido'){
+      footer.style.display='flex';
+      footer.style.justifyContent='space-between';
+      footer.style.alignItems='center';
+      const btn=document.createElement('button');
+      btn.className='btn btn-danger btn-excluir-rastreio-v36';
+      btn.textContent='🗑 Excluir este contrato';
+      btn.onclick=()=>excluirContratoV36(c.alunoId,c.id);
+      footer.insertBefore(btn,footer.firstChild);
+    }
+  },0);
+};
+
+// ──────────────────────────────────────────────────
+// AUDITORIA V36: CONTRATO ÓRFÃO E INÍCIO INCONSISTENTE
+// ──────────────────────────────────────────────────
+const auditoriaFinanceiraBaseV36=auditoriaFinanceiraV35;
+auditoriaFinanceiraV35=function(){
+  const base=auditoriaFinanceiraBaseV36();
+  const problemas=[...base.problemas];
+  const alunosMap=new Map(alunos.map(a=>[String(a.id),a]));
+
+  contratos.filter(c=>c.status!=='excluido').forEach(c=>{
+    const a=alunosMap.get(String(c.alunoId||''));
+    if(!a){
+      problemas.push({
+        nivel:'erro',
+        tipo:'contrato_orfao',
+        titulo:'Contrato ativo sem aluno correspondente',
+        detalhe:`${c.alunoNome||'—'} · contrato ${c.id} · alunoId ${c.alunoId||'—'} · ${fmtData(c.inicio)} → ${fmtData(c.vencOriginal||c.venc)}`,
+        alunoId:'',
+        origemId:c.id,
+        contratoId:c.id,
+        contratoAlunoId:c.alunoId
+      });
+      return;
+    }
+
+    if(a.dataEntrada && c.inicio){
+      const entrada=dataLocal(a.dataEntrada),ini=dataLocal(c.inicio);
+      if(entrada&&ini&&ini<entrada){
+        problemas.push({
+          nivel:'alerta',
+          tipo:'contrato_antes_entrada',
+          titulo:'Contrato começa antes da entrada cadastrada do aluno',
+          detalhe:`${a.nome} · entrada ${fmtData(a.dataEntrada)} · contrato ${c.id} inicia ${fmtData(c.inicio)}`,
+          alunoId:a.id,
+          origemId:c.id,
+          contratoId:c.id,
+          contratoAlunoId:c.alunoId
+        });
+      }
+    }
+  });
+
+  return {
+    ...base,
+    problemas,
+    erros:problemas.filter(p=>p.nivel==='erro').length,
+    alertas:problemas.filter(p=>p.nivel==='alerta').length
+  };
+};
+
+htmlAuditoriaFinanceiraV35=function(){
+  const a=auditoriaFinanceiraV35();
+  const cor=a.erros?'var(--vermelho)':a.alertas?'#b45309':'var(--verde)';
+  const titulo=a.erros?`${a.erros} erro(s) e ${a.alertas} alerta(s)`:a.alertas?`${a.alertas} alerta(s)`:'Nenhuma inconsistência detectada';
+
+  const rows=a.problemas.map(p=>{
+    const cid=p.contratoId||(['contrato_orfao','contrato_antes_entrada','contrato_legado','contrato_duplicado','contrato_sobreposto'].includes(p.tipo)?p.origemId:'');
+    const contrato=cid?contratoPorIdV36(cid):null;
+    const podeExcluir=!!contrato && contrato.status!=='excluido' && contrato.status!=='cancelado';
+    return `<tr>
+      <td><span class="badge" style="color:${p.nivel==='erro'?'var(--vermelho)':'#92400e'};background:${p.nivel==='erro'?'#fef2f2':'#fffbeb'}">${p.nivel==='erro'?'ERRO':'ALERTA'}</span></td>
+      <td><strong>${esc(p.titulo)}</strong><div style="font-size:11px;color:var(--texto-muted);margin-top:3px">${esc(p.detalhe)}</div></td>
+      <td style="text-align:right;white-space:nowrap">
+        ${p.alunoId&&alunos.some(x=>String(x.id)===String(p.alunoId))?`<button class="btn btn-ghost btn-sm" onclick="abrirPerfilAluno('${esc(p.alunoId)}')">Ver aluno</button>`:''}
+        ${podeExcluir?`<button class="btn btn-danger btn-sm" onclick="excluirContratoV36('${esc(String(contrato.alunoId||''))}','${esc(String(contrato.id))}')">Excluir contrato</button>`:''}
+      </td>
+    </tr>`;
+  }).join('');
+
+  return `<div class="section-box" id="auditoria-financeira-v35" style="margin-top:24px;border-top:3px solid ${cor}">
+    <div class="section-header">
+      <div>
+        <div class="section-title">Auditoria Financeira</div>
+        <div style="font-size:12px;color:var(--texto-muted)">Excluído = fora de todos os cálculos. Cancelado = histórico real preservado até a data de cancelamento.</div>
+      </div>
+      <div style="text-align:right;font-size:12px">
+        <strong style="color:${cor}">${esc(titulo)}</strong>
+        <div style="color:var(--texto-muted);margin-top:3px">${a.contratosValidos} contratos válidos · ${a.contratosArquivados} excluído(s) · ${a.pagamentosAtivos} movimentos carregados</div>
+      </div>
+    </div>
+    ${a.problemas.length
+      ?`<div class="table-wrap"><table><thead><tr><th>Nível</th><th>Inconsistência</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`
+      :`<div style="padding:18px;color:var(--verde);font-weight:700">✓ Nenhuma inconsistência estrutural encontrada nos dados carregados.</div>`}
+  </div>`;
+};
+
+// ──────────────────────────────────────────────────
+// PERFIL: TEXTO DA EXCLUSÃO DEIXA A DIFERENÇA CLARA
+// ──────────────────────────────────────────────────
+const abrirPerfilAlunoBaseV36=abrirPerfilAluno;
+abrirPerfilAluno=async function(id){
+  await abrirPerfilAlunoBaseV36(id);
+  setTimeout(()=>{
+    document.querySelectorAll('button[onclick^="excluirContrato"]').forEach(btn=>{
+      btn.title='Excluir: remove totalmente este contrato de DRE, caixa e saldos. Não confundir com cancelar.';
+    });
+  },0);
+};
+window.abrirPerfilAluno=abrirPerfilAluno;
+
+// ──────────────────────────────────────────────────
+// TESTE DE INTEGRIDADE EM TEMPO REAL
+// ──────────────────────────────────────────────────
+function validarContratoExcluidoV36(contratoId){
+  const c=contratoPorIdV36(contratoId);
+  if(!c || c.status!=='excluido') return {ok:false,motivo:'contrato_nao_excluido'};
+  const compAno=Number(String(c.inicio||'').slice(0,4))||ANO_ATUAL;
+  const compMes=Math.max(0,(Number(String(c.inicio||'').slice(5,7))||1)-1);
+  const conta=contratoContaCompetenciaMes(c,compMes,compAno);
+  const movs=pagamentos.filter(p=>String(p.contratoId)===String(contratoId)&&pagamentoFinanceiroValidoV36(p));
+  return {
+    ok:!conta&&movs.length===0,
+    contaCompetencia:conta,
+    movimentosFinanceirosValidos:movs.length
+  };
+}
+window.validarContratoExcluidoV36=validarContratoExcluidoV36;
