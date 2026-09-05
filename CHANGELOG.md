@@ -18,3 +18,10 @@
 - Conta física e origem gerencial nos lançamentos de caixa.
 - PDFs institucionais para DRE e simulação de cancelamento.
 - Limpeza de arquivos de testes antigos do pacote de produção.
+
+## V37.2 — estabilidade do Caixa
+- Corrigido o comportamento em que a rota Caixa podia ficar em branco quando uma etapa da nova Tesouraria falhava durante o carregamento.
+- As coleções da Tesouraria agora são carregadas de forma independente; falha em uma coleção não derruba a tela inteira.
+- Adicionada tela de erro/diagnóstico dentro do próprio Studio FB em vez de página branca.
+- Removidos do topbar do Caixa os botões antigos do Caixa 1.0; as ações ficam dentro da página mensal da Tesouraria.
+- Adicionado favicon embutido para eliminar o 404 de `/favicon.ico` no console.

@@ -42,3 +42,6 @@ A DRE e a simulação de cancelamento passam a usar um layout institucional pró
 ### Arquivos do repositório
 
 Arquivos intermediários de teste e auditorias antigas não fazem mais parte do pacote de produção. O projeto mantém somente o código e documentação consolidada.
+
+### V37.2 — correção de estabilidade
+A Tesouraria possui proteção de renderização: se uma leitura remota ou um bloco de cálculo falhar, o Caixa mostra o diagnóstico dentro da interface e mantém o restante do sistema utilizável. As leituras das coleções `tesouraria_*` são independentes para impedir que uma falha isolada produza página em branco.

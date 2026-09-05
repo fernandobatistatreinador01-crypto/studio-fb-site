@@ -11324,3 +11324,138 @@ renderPerfilContaV37=async function(id){
   loading(false);
 };
 
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// V37.2 — ESTABILIDADE DO CAIXA / TESOURARIA
+// - uma coleção nova com erro não derruba o módulo inteiro;
+// - Caixa nunca fica em branco: falhas são mostradas dentro da própria página;
+// - remove os botões antigos do Caixa 1.0 no topbar;
+// - mantém fallback local da posição de abertura para permitir diagnóstico.
+// ═══════════════════════════════════════════════════════════════════════════════
+const VERSAO_TESOURARIA_V372 = '37.2';
+let tesErrosCargaV372 = [];
+let tesCargaExecutadaV372 = false;
+
+function registrarErroTesV372(etapa,e){
+  const msg = e?.message || String(e || 'erro desconhecido');
+  tesErrosCargaV372.push({etapa,mensagem:msg});
+  console.warn(`[Tesouraria V37.2] ${etapa}:`, e);
+}
+
+async function lerColecaoTesV372(nome){
+  try{
+    const snap = await getDocs(collection(db,nome));
+    return snap.docs.map(d=>({id:d.id,...d.data()}));
+  }catch(e){
+    registrarErroTesV372(`Leitura de ${nome}`,e);
+    return [];
+  }
+}
+
+async function lerConfigTesV372(){
+  try{
+    const snap = await getDoc(doc(db,'tesouraria_config','principal'));
+    if(snap.exists()) return {id:snap.id,...snap.data()};
+    const padrao = configPadraoTesV37();
+    try{
+      await setDoc(doc(db,'tesouraria_config','principal'),padrao);
+    }catch(e){
+      // A tela continua funcional com o padrão local; o erro fica visível.
+      registrarErroTesV372('Gravação da configuração inicial',e);
+    }
+    return padrao;
+  }catch(e){
+    registrarErroTesV372('Leitura da configuração da tesouraria',e);
+    return configPadraoTesV37();
+  }
+}
+
+carregarTesourariaV37 = async function(forcar=false){
+  if(tesCargaExecutadaV372 && !forcar) return;
+  tesErrosCargaV372 = [];
+  try{
+    const [cfg,movs,ops,concs,fechos,status] = await Promise.all([
+      lerConfigTesV372(),
+      lerColecaoTesV372('tesouraria_movimentos'),
+      lerColecaoTesV372('tesouraria_operacoes'),
+      lerColecaoTesV372('tesouraria_conciliacoes'),
+      lerColecaoTesV372('tesouraria_fechamentos'),
+      lerColecaoTesV372('tesouraria_status')
+    ]);
+    tesConfigV37 = cfg || configPadraoTesV37();
+    tesMovsV37 = Array.isArray(movs)?movs:[];
+    tesOpsV37 = Array.isArray(ops)?ops:[];
+    tesConcsV37 = Array.isArray(concs)?concs:[];
+    tesFechosV37 = Array.isArray(fechos)?fechos:[];
+    tesStatusV37 = Array.isArray(status)?status:[];
+  }catch(e){
+    registrarErroTesV372('Carregamento geral',e);
+    tesConfigV37 = tesConfigV37 || configPadraoTesV37();
+  }finally{
+    tesCargaExecutadaV372 = true;
+  }
+};
+
+function htmlErrosCargaTesV372(){
+  if(!tesErrosCargaV372.length) return '';
+  const linhas = tesErrosCargaV372.map(x=>`<li><strong>${esc(x.etapa)}:</strong> ${esc(x.mensagem)}</li>`).join('');
+  return `<div id="aviso-carga-tes-v372" style="margin-bottom:16px;background:#fffbeb;border:1px solid #fde68a;border-radius:9px;padding:12px 14px;color:#92400e;font-size:12px;line-height:1.5">
+    <strong>⚠ Tesouraria carregada parcialmente.</strong>
+    <div style="margin-top:4px">A página foi mantida aberta para diagnóstico. Algumas informações remotas podem estar temporariamente indisponíveis.</div>
+    <details style="margin-top:7px"><summary style="cursor:pointer;font-weight:700">Ver detalhes técnicos</summary><ul style="margin:7px 0 0 18px;padding:0">${linhas}</ul></details>
+  </div>`;
+}
+
+const renderCaixaCoreV372 = renderCaixaView;
+renderCaixaView = async function(){
+  try{
+    await renderCaixaCoreV372();
+    const c=document.getElementById('content');
+    if(c && tesErrosCargaV372.length && !document.getElementById('aviso-carga-tes-v372')){
+      c.insertAdjacentHTML('afterbegin',htmlErrosCargaTesV372());
+    }
+  }catch(e){
+    console.error('Falha ao montar Caixa/Tesouraria V37.2',e);
+    const c=document.getElementById('content');
+    if(!c) return;
+    const msg=esc(e?.message||String(e||'Erro desconhecido'));
+    c.innerHTML=`
+      <div style="max-width:780px;margin:34px auto;background:#fff;border:1px solid #fecaca;border-top:4px solid var(--vermelho);border-radius:10px;padding:22px;box-shadow:var(--shadow-sm)">
+        <div style="font-family:'Bebas Neue',sans-serif;font-size:27px;margin-bottom:8px">CAIXA — FALHA DE CARREGAMENTO</div>
+        <div style="font-size:13px;line-height:1.55;color:var(--texto)">O módulo não conseguiu montar um dos blocos da Tesouraria. Nenhum lançamento foi alterado.</div>
+        <div style="margin-top:12px;background:#fef2f2;border:1px solid #fecaca;border-radius:7px;padding:10px 12px;font-size:12px;color:#991b1b"><strong>Detalhe:</strong> ${msg}</div>
+        ${htmlErrosCargaTesV372()}
+        <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap">
+          <button class="btn btn-primary" onclick="tesCargaExecutadaV372=false;renderCaixaView()">Tentar novamente</button>
+          <button class="btn btn-ghost" onclick="setView('dashboard')">Voltar ao Dashboard</button>
+        </div>
+      </div>`;
+  }
+};
+window.renderCaixaView = renderCaixaView;
+
+// O topbar do Caixa antigo apontava para funções do Caixa 1.0. A V37.2 deixa as
+// ações dentro da própria página de Tesouraria, onde o contexto mensal é visível.
+const setViewBaseV372 = setView;
+setView = function(v){
+  setViewBaseV372(v);
+  if(v==='caixa'){
+    const top=document.getElementById('topbar-right');
+    if(top) top.innerHTML='<span style="font-size:11px;color:var(--texto-muted);font-weight:700;letter-spacing:.6px">TESOURARIA · V37.2</span>';
+  }
+};
+window.setView = setView;
+
+// Diagnóstico manual simples, útil sem precisar abrir o console.
+window.diagnosticoTesourariaV372 = function(){
+  return {
+    versao:VERSAO_TESOURARIA_V372,
+    config:!!tesConfigV37,
+    movimentos:tesMovsV37.length,
+    operacoes:tesOpsV37.length,
+    conciliacoes:tesConcsV37.length,
+    fechamentos:tesFechosV37.length,
+    status:tesStatusV37.length,
+    erros:[...tesErrosCargaV372]
+  };
+};
