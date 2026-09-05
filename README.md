@@ -45,3 +45,10 @@ Arquivos intermediários de teste e auditorias antigas não fazem mais parte do 
 
 ### V37.2 — correção de estabilidade
 A Tesouraria possui proteção de renderização: se uma leitura remota ou um bloco de cálculo falhar, o Caixa mostra o diagnóstico dentro da interface e mantém o restante do sistema utilizável. As leituras das coleções `tesouraria_*` são independentes para impedir que uma falha isolada produza página em branco.
+
+
+## V37.3 — correção do Caixa em branco
+
+Corrigido um conflito com a função legada `loading(false)`: após a Tesouraria montar o conteúdo, essa função limpava `#content`, deixando a página visualmente em branco apesar de não haver erro JavaScript.
+
+A correção foi aplicada à visão geral do Caixa e aos perfis de conta/caixinha.

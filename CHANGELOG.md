@@ -25,3 +25,9 @@
 - Adicionada tela de erro/diagnóstico dentro do próprio Studio FB em vez de página branca.
 - Removidos do topbar do Caixa os botões antigos do Caixa 1.0; as ações ficam dentro da página mensal da Tesouraria.
 - Adicionado favicon embutido para eliminar o 404 de `/favicon.ico` no console.
+
+
+## V37.3
+- Corrigida tela branca do Caixa/Tesouraria.
+- Removida a limpeza indevida de `#content` após o render.
+- Corrigidos também os perfis de contas e caixinhas.
