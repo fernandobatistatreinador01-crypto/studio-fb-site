@@ -23,24 +23,22 @@
       <div style="font-size:13px;color:#666;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;font-weight:600">Acesso restrito</div>
       <div style="font-size:11px;color:#444;margin-bottom:20px">Autenticação segura via Firebase</div>
 
-      <div style="margin-bottom:14px">
-        <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:#555;display:block;margin-bottom:6px">E-mail</label>
-        <input id="login-email" type="email" autocomplete="username" placeholder="seu@email.com"
-          style="width:100%;background:#111;border:1px solid #333;color:#eee;border-radius:6px;padding:11px 14px;font-family:'Barlow',sans-serif;font-size:14px;outline:none"
-          onfocus="this.style.borderColor='#D32F2F'" onblur="this.style.borderColor='#333'"
-          onkeydown="if(event.key==='Enter')document.getElementById('login-senha').focus()">
-      </div>
+      <form id="login-form" novalidate>
+        <div style="margin-bottom:14px">
+          <label for="login-email" style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:#555;display:block;margin-bottom:6px">E-mail</label>
+          <input id="login-email" type="email" autocomplete="username" placeholder="seu@email.com" required
+            style="width:100%;background:#111;border:1px solid #333;color:#eee;border-radius:6px;padding:11px 14px;font-family:'Barlow',sans-serif;font-size:14px;outline:none">
+        </div>
 
-      <div style="margin-bottom:24px">
-        <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:#555;display:block;margin-bottom:6px">Senha</label>
-        <input id="login-senha" type="password" autocomplete="current-password" placeholder="••••••••"
-          style="width:100%;background:#111;border:1px solid #333;color:#eee;border-radius:6px;padding:11px 14px;font-family:'Barlow',sans-serif;font-size:14px;outline:none"
-          onfocus="this.style.borderColor='#D32F2F'" onblur="this.style.borderColor='#333'"
-          onkeydown="if(event.key==='Enter')fazerLogin()">
-      </div>
+        <div style="margin-bottom:24px">
+          <label for="login-senha" style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:#555;display:block;margin-bottom:6px">Senha</label>
+          <input id="login-senha" type="password" autocomplete="current-password" placeholder="••••••••" required
+            style="width:100%;background:#111;border:1px solid #333;color:#eee;border-radius:6px;padding:11px 14px;font-family:'Barlow',sans-serif;font-size:14px;outline:none">
+        </div>
 
-      <div id="login-erro" style="display:none;background:rgba(211,47,47,0.15);border:1px solid rgba(211,47,47,0.3);color:#f87171;border-radius:6px;padding:10px 14px;font-size:13px;margin-bottom:16px"></div>
-      <button onclick="fazerLogin()" style="width:100%;background:var(--vermelho);color:#fff;border:none;border-radius:6px;padding:13px;font-family:'Bebas Neue',sans-serif;font-size:18px;letter-spacing:1px;cursor:pointer" onmouseover="this.style.background='#B71C1C'" onmouseout="this.style.background='#D32F2F'">ENTRAR</button>
+        <div id="login-erro" role="alert" aria-live="polite" style="display:none;background:rgba(211,47,47,0.15);border:1px solid rgba(211,47,47,0.3);color:#f87171;border-radius:6px;padding:10px 14px;font-size:13px;margin-bottom:16px"></div>
+        <button id="login-submit" type="submit" style="width:100%;background:var(--vermelho);color:#fff;border:none;border-radius:6px;padding:13px;font-family:'Bebas Neue',sans-serif;font-size:18px;letter-spacing:1px;cursor:pointer">ENTRAR</button>
+      </form>
     </div>
     <div style="text-align:center;margin-top:20px;font-size:11px;color:#333">Sistema exclusivo Studio FB</div>
   </div>

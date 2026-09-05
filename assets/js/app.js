@@ -81,7 +81,7 @@ function mensagemErroAuth(code) {
 window.fazerLogin = async function() {
   const emailCampo = document.getElementById('login-email');
   const senhaCampo = document.getElementById('login-senha');
-  const btn = document.querySelector('#login-screen button[onclick="fazerLogin()"]');
+  const btn = document.getElementById('login-submit');
   const erro = document.getElementById('login-erro');
 
   const email = emailCampo?.value.trim() || '';
@@ -131,6 +131,15 @@ window.fazerLogout = async function() {
     alert('Não foi possível encerrar a sessão. Tente novamente.');
   }
 };
+
+// Login por submit de formulário: evita handlers inline e mantém o HTML válido.
+const loginForm = document.getElementById('login-form');
+if (loginForm) {
+  loginForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    window.fazerLogin();
+  });
+}
 
 // ═══════════════════════════════════════════════════
 // CONSTANTES

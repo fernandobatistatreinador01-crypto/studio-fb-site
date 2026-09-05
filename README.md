@@ -59,3 +59,11 @@ A tela **Despesas** ganhou uma seção de **Conciliação de Caixa das Despesas*
 A despesa permanece na competência original, mas só sai do caixa depois que Fernando registra a data e o valor efetivamente pagos.
 
 > Importante: pagamentos históricos de despesas não são inventados pelo sistema. Meses antigos precisam ser conciliados manualmente quando a data real de pagamento não estiver registrada.
+
+
+## V32.1 — correção do login
+
+- Login passou a usar `<form>` real.
+- Removidos handlers JavaScript inline do formulário de autenticação.
+- Enter/submissão é tratado por `addEventListener`.
+- Remove o aviso do Chrome de senha fora de formulário.

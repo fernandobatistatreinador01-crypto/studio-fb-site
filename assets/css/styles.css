@@ -191,3 +191,8 @@ tr:hover td { background: #fafafa; }
 .text-red { color: var(--vermelho); }
 .text-green { color: var(--verde); }
 .text-muted { color: var(--texto-muted); }
+
+/* LOGIN V32.1 — sem JavaScript inline */
+#login-screen input:focus { border-color: var(--vermelho) !important; }
+#login-submit:hover { background: var(--vermelho-dark) !important; }
+#login-submit:disabled { cursor: wait; }
