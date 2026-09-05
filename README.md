@@ -91,3 +91,29 @@ Exemplo do contrato (anual 3x/semana):
 - Valor mensal contratual: R$ 483,00
 - Cancelamento no 5º mês: multa de 15% = R$ 869,40
 - Reembolso teórico sem extras: R$ 1.802,60
+
+
+## Contratos e competência — V34
+
+A V34 separa explicitamente três conceitos:
+
+1. **Valor total do contrato — bruto**  
+   Valor nominal do contrato. É a base do valor mensal contratual usado no cancelamento e da multa rescisória.
+
+2. **Valor líquido / à vista de referência**  
+   Valor que efetivamente fica para o Studio. É a base total da competência da DRE e a base máxima do reembolso.
+
+3. **Valor cobrado no cartão — bruto**  
+   Normalmente é igual ao valor total do contrato. O sistema sugere essa equivalência, mas permite edição.
+
+A competência continua seguindo os ciclos do contrato, independentemente da data do pagamento, porém o **valor reconhecido por competência é o líquido**.
+
+Exemplo:
+- bruto contrato: R$ 5.796,00
+- líquido / à vista: R$ 5.087,00
+- competência total do contrato: R$ 5.087,00
+- competência mensal aproximada no anual: R$ 423,92 (com ajuste de centavos na última competência)
+- valor mensal contratual para cancelamento: R$ 483,00
+- multa de 15%: calculada sobre R$ 5.796,00
+
+A simulação de cancelamento pode ser impressa antes da confirmação e não altera contrato, DRE ou caixa.

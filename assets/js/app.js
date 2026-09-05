@@ -8775,3 +8775,681 @@ abrirPerfilAluno = async function(id){
   },0);
 };
 window.abrirPerfilAluno = abrirPerfilAluno;
+
+// ═══════════════════════════════════════════════════
+// V34 — BRUTO x LÍQUIDO + COMPETÊNCIA LÍQUIDA
+// + impressão da simulação
+// + mensagens do sistema em modal próprio
+// ═══════════════════════════════════════════════════
+const VERSAO_CONTRATO_V34 = '34.0';
+
+// ──────────────────────────────────────────────────
+// MODAIS DE MENSAGEM DO SISTEMA
+// ──────────────────────────────────────────────────
+function fecharModalSistemaV34(valor){
+  const el=document.getElementById('modal-sistema-v34');
+  if(el)el.remove();
+  const fn=window.__resolveModalSistemaV34;
+  window.__resolveModalSistemaV34=null;
+  if(fn)fn(valor);
+}
+function modalSistemaV34({titulo='Studio FB',mensagem='',tipo='info',confirmacao=false,rotuloConfirmar='Confirmar',rotuloCancelar='Cancelar'}={}){
+  document.getElementById('modal-sistema-v34')?.remove();
+  if(window.__resolveModalSistemaV34){
+    window.__resolveModalSistemaV34(false);
+    window.__resolveModalSistemaV34=null;
+  }
+  const cfg={
+    info:{cor:'#1d4ed8',bg:'#eff6ff',borda:'#bfdbfe',icone:'ℹ️'},
+    sucesso:{cor:'#166534',bg:'#f0fdf4',borda:'#bbf7d0',icone:'✓'},
+    alerta:{cor:'#92400e',bg:'#fffbeb',borda:'#fde68a',icone:'!'},
+    perigo:{cor:'#991b1b',bg:'#fef2f2',borda:'#fecaca',icone:'!'}
+  }[tipo]||{cor:'#1d4ed8',bg:'#eff6ff',borda:'#bfdbfe',icone:'ℹ️'};
+
+  return new Promise(resolve=>{
+    window.__resolveModalSistemaV34=resolve;
+    const linhas=String(mensagem??'').split('\n').map(x=>`<div>${esc(x)||'&nbsp;'}</div>`).join('');
+    const html=`<div id="modal-sistema-v34" style="position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:2000;display:flex;align-items:center;justify-content:center;padding:16px">
+      <div style="background:#fff;border-radius:12px;width:100%;max-width:500px;box-shadow:var(--shadow-lg);overflow:hidden">
+        <div style="padding:18px 20px;border-bottom:1px solid var(--borda);display:flex;align-items:center;gap:10px">
+          <div style="width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:${cfg.bg};color:${cfg.cor};font-weight:800">${cfg.icone}</div>
+          <div style="font-family:'Bebas Neue',sans-serif;font-size:22px">${esc(titulo)}</div>
+        </div>
+        <div style="padding:20px;color:var(--texto);font-size:13px;line-height:1.55">${linhas}</div>
+        <div style="padding:14px 20px;border-top:1px solid var(--borda);display:flex;justify-content:flex-end;gap:8px;background:#fafafa">
+          ${confirmacao?`<button class="btn btn-ghost" onclick="fecharModalSistemaV34(false)">${esc(rotuloCancelar)}</button>`:''}
+          <button class="btn ${tipo==='perigo'?'btn-danger':'btn-primary'}" onclick="fecharModalSistemaV34(true)">${esc(confirmacao?rotuloConfirmar:'OK')}</button>
+        </div>
+      </div>
+    </div>`;
+    document.body.insertAdjacentHTML('beforeend',html);
+  });
+}
+window.fecharModalSistemaV34=fecharModalSistemaV34;
+window.mensagemSistemaV34=(mensagem,titulo='Studio FB',tipo='info')=>modalSistemaV34({titulo,mensagem,tipo});
+window.confirmarSistemaV34=(mensagem,titulo='Confirmar',tipo='alerta',rotuloConfirmar='Confirmar')=>modalSistemaV34({titulo,mensagem,tipo,confirmacao:true,rotuloConfirmar});
+
+// Todos os alertas simples do sistema passam a usar modal visual.
+// As rotinas antigas continuam podendo chamar alert(...), mas não exibem caixa nativa do navegador.
+window.alert = function(mensagem){
+  modalSistemaV34({titulo:'Studio FB',mensagem:String(mensagem??''),tipo:'alerta'});
+};
+
+// ──────────────────────────────────────────────────
+// VALORES DO CONTRATO
+// ──────────────────────────────────────────────────
+function valorTotalBrutoContratoV34(c){
+  const explicito=Number(c?.valorTotalBruto||0);
+  if(explicito>0)return explicito;
+
+  // V33 já passou a guardar valorTotal como bruto e valorVistaReferencia como líquido.
+  if(Number(c?.valorVistaReferencia||0)>0 && Number(c?.valorTotal||0)>0){
+    return Number(c.valorTotal);
+  }
+
+  // Contratos legados da fase em que valorTotal era líquido e valorBruto era o cobrado.
+  if(Number(c?.valorBruto||0)>Number(c?.valorTotal||0)){
+    return Number(c.valorBruto);
+  }
+  return Number(c?.valorTotal ?? c?.valor ?? 0);
+}
+function valorLiquidoContratoV34(c){
+  const explicito=Number(c?.valorLiquidoContrato||0);
+  if(explicito>0)return explicito;
+
+  const vista=Number(c?.valorVistaReferencia ?? c?.valorVista ?? 0);
+  if(vista>0)return vista;
+
+  // Legado: valorTotal era o líquido e valorBruto era apenas informativo.
+  if(Number(c?.valorBruto||0)>Number(c?.valorTotal||0) && Number(c?.valorTotal||0)>0){
+    return Number(c.valorTotal);
+  }
+  return Number(c?.valorTotal ?? c?.valor ?? 0);
+}
+function competenciaMensalLiquidaV34(c){
+  return mesesContrato(c)>0 ? valorLiquidoContratoV34(c)/mesesContrato(c) : 0;
+}
+function mensalCancelamentoBrutoV34(c){
+  return mesesContrato(c)>0 ? valorTotalBrutoContratoV34(c)/mesesContrato(c) : 0;
+}
+window.valorTotalBrutoContratoV34=valorTotalBrutoContratoV34;
+window.valorLiquidoContratoV34=valorLiquidoContratoV34;
+
+// Valor à vista usado no cancelamento = valor líquido efetivo do contrato.
+valorVistaReferenciaV26 = function(c){ return valorLiquidoContratoV34(c); };
+
+// A competência da DRE passa a ser distribuída sobre o VALOR LÍQUIDO.
+// A data do pagamento continua sem deslocar o mês de competência.
+valorCompetenciaParcelaV28 = function(c, parcela){
+  const totalC=centavosV28(valorLiquidoContratoV34(c));
+  const n=totalCompetenciasContratoV28(c);
+  const p=Math.max(1,Math.min(n,Number(parcela)||1));
+  const baseC=Math.floor(totalC/n);
+  const valorC=p<n?baseC:(totalC-baseC*(n-1));
+  return reaisV28(valorC);
+};
+
+// Saldo a cobrar do aluno compara BRUTO do contrato com BRUTO já cobrado/pago.
+// Cancelamento continua usando totalPagoContrato(), que é líquido efetivamente recebido.
+function totalPagoBrutoContratoV34(contratoId){
+  return pagamentosDoContrato(contratoId).reduce((s,p)=>{
+    const v=(p.forma==='Cartão' && Number(p.valorBruto||0)>0) ? Number(p.valorBruto) : Number(p.valor||0);
+    return s+v;
+  },0);
+}
+function totalPagoLiquidoContratoV34(contratoId){
+  return pagamentosDoContrato(contratoId).reduce((s,p)=>s+Number(p.valor||0),0);
+}
+function saldoBrutoContratoV34(c){
+  return Math.max(0,valorTotalBrutoContratoV34(c)-totalPagoBrutoContratoV34(c?.id));
+}
+function saldoLiquidoContratoV34(c){
+  return Math.max(0,valorLiquidoContratoV34(c)-totalPagoLiquidoContratoV34(c?.id));
+}
+saldoContrato = function(c){ return saldoBrutoContratoV34(c); };
+
+// Persistência: sempre grava os campos explícitos V34.
+const salvarContratoDbBaseV34=salvarContratoDb;
+salvarContratoDb=async function(c){
+  if(!c)return;
+  const campoTotal=document.getElementById('ct-valor')||document.getElementById('f-valor');
+  const campoLiquido=document.getElementById('ct-valor-vista')||document.getElementById('f-valor-vista');
+
+  const total=Number(c.valorTotalBruto||c.valorTotal||campoTotal?.value||0);
+  const liquido=Number(c.valorLiquidoContrato||c.valorVistaReferencia||campoLiquido?.value||total||0);
+
+  if(total>0){
+    c.valorTotal=arredV32(total);
+    c.valorTotalBruto=arredV32(total);
+  }
+  if(liquido>0){
+    c.valorLiquidoContrato=arredV32(liquido);
+    c.valorVistaReferencia=arredV32(liquido);
+  }
+  return salvarContratoDbBaseV34(c);
+};
+
+// ──────────────────────────────────────────────────
+// NOVO CONTRATO / RENOVAÇÃO / EDIÇÃO
+// ──────────────────────────────────────────────────
+function abrirModalContratoV34(alunoId,contratoId=null){
+  const a=alunos.find(x=>String(x.id)===String(alunoId));if(!a)return;
+  const atual=contratoId?contratos.find(c=>String(c.id)===String(contratoId)):contratoVigenteAluno(alunoId);
+
+  const baseInicio=atual?.venc?(()=>{
+    const d=dataLocal(atual.venc);
+    if(!d)return a.dataEntrada||new Date().toISOString().split('T')[0];
+    d.setDate(d.getDate()+1);
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  })():(a.dataEntrada||new Date().toISOString().split('T')[0]);
+
+  const plano=atual?.plano||'mensal';
+  const c=contratoId?atual:{
+    plano,
+    valorTotal:atual?valorTotalBrutoContratoV34(atual):400,
+    valorTotalBruto:atual?valorTotalBrutoContratoV34(atual):400,
+    valorLiquidoContrato:atual?valorLiquidoContratoV34(atual):400,
+    valorVistaReferencia:atual?valorLiquidoContratoV34(atual):400,
+    valorBruto:atual?.valorBruto||null,
+    inicio:baseInicio,
+    venc:addMeses(baseInicio,PLANO_MESES[plano]||1),
+    pgto:atual?.pgto||'PIX',
+    recebimento:atual?.recebimento||'mensal',
+    parcelas:atual?.parcelas||null,
+    obs:''
+  };
+  if(!c)return;
+
+  const brutoContrato=valorTotalBrutoContratoV34(c)||0;
+  const liquido=valorLiquidoContratoV34(c)||brutoContrato;
+  const brutoCartao=Number(c.valorBruto||0)||brutoContrato;
+  const titulo=contratoId?'Editar Contrato':'Novo Contrato / Renovação';
+
+  const html=`<div style="position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:500;display:flex;align-items:center;justify-content:center;padding:16px" id="modal-contrato-overlay">
+    <div style="background:#fff;border-radius:12px;width:100%;max-width:650px;box-shadow:var(--shadow-lg);max-height:92vh;overflow-y:auto">
+      <div style="padding:20px 24px 0;display:flex;align-items:center;justify-content:space-between">
+        <div style="font-family:'Bebas Neue',sans-serif;font-size:23px">${titulo}</div>
+        <button onclick="document.getElementById('modal-contrato-overlay').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#999">✕</button>
+      </div>
+      <div style="padding:8px 24px 14px;font-size:13px;color:var(--texto-muted);border-bottom:1px solid var(--borda)"><strong>${esc(a.nome)}</strong></div>
+
+      <div style="padding:14px 24px;background:#eff6ff;border-bottom:1px solid #bfdbfe;color:#1e40af;font-size:12px">
+        <strong>Como os valores funcionam:</strong> o valor total/bruto é a base da multa e do cálculo de cancelamento.
+        O valor líquido é o que efetivamente fica para o Studio e é a base da competência da DRE.
+      </div>
+
+      <div style="padding:20px 24px" class="form-grid">
+        <div class="form-group"><label class="form-label">Nome do contrato</label><input class="form-input" id="ct-nome" value="${esc(c?.nome&&c.nome!=='Contrato inicial'?c.nome:'')}" placeholder="Ex.: Anual 2026"></div>
+        <div class="form-group"><label class="form-label">Plano</label><select class="form-select" id="ct-plano" onchange="calcContratoVenc();calcContratoV34()">${Object.entries(PLANO_LABEL).map(([v,l])=>`<option value="${v}" ${c.plano===v?'selected':''}>${l}</option>`).join('')}</select></div>
+
+        <div class="form-group">
+          <label class="form-label">Valor total do contrato — bruto (R$)</label>
+          <input class="form-input" type="number" id="ct-valor" value="${Number(brutoContrato).toFixed(2)}" step="0.01" oninput="alterarTotalContratoV34()">
+          <div class="form-hint">Valor nominal contratado. Base da multa e do valor mensal usado no cancelamento.</div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Valor líquido / à vista de referência (R$)</label>
+          <input class="form-input" type="number" id="ct-valor-vista" value="${Number(liquido).toFixed(2)}" step="0.01" oninput="this.dataset.manual='1';calcContratoV34();calcCtCartaoV34()">
+          <div class="form-hint">
+            Valor que efetivamente fica para o Studio. Base da competência e do reembolso.
+            <button type="button" style="background:none;border:0;padding:0;color:var(--vermelho);font:inherit;font-weight:700;cursor:pointer" onclick="igualarLiquidoAoTotalV34()">Usar mesmo valor do bruto</button>
+          </div>
+        </div>
+
+        <div class="form-group"><label class="form-label">Forma prevista</label><select class="form-select" id="ct-pgto" onchange="toggleCtCartaoV34()"><option value="PIX" ${c.pgto==='PIX'?'selected':''}>PIX</option><option value="Cartão" ${c.pgto==='Cartão'?'selected':''}>Cartão</option><option value="Dinheiro" ${c.pgto==='Dinheiro'?'selected':''}>Dinheiro</option></select></div>
+
+        <div class="form-group" id="ct-bruto-group" style="display:none">
+          <label class="form-label">Valor cobrado no cartão — bruto (R$)</label>
+          <input class="form-input" type="number" id="ct-valor-bruto" data-auto="${Math.abs(brutoCartao-brutoContrato)<0.01?'1':'0'}" value="${Number(brutoCartao).toFixed(2)}" step="0.01" oninput="this.dataset.auto='0';calcCtCartaoV34()">
+          <div class="form-hint">
+            Normalmente é igual ao valor total do contrato.
+            <button type="button" style="background:none;border:0;padding:0;color:var(--vermelho);font:inherit;font-weight:700;cursor:pointer" onclick="igualarBrutoCartaoAoContratoV34()">Usar valor do contrato</button>
+          </div>
+        </div>
+
+        <div class="form-group" id="ct-cartao-resumo-group" style="display:none">
+          <label class="form-label">Resumo do cartão</label>
+          <div class="form-input" id="ct-cartao-hint" style="background:#fff7ed;color:#92400e;min-height:44px;height:auto;display:flex;align-items:center;line-height:1.4"></div>
+        </div>
+
+        <div class="form-group" id="ct-parcelas-group" style="display:none"><label class="form-label">Parcelamento no cartão</label><select class="form-select" id="ct-parcelas"><option value="">Não informado</option>${Array.from({length:12},(_,i)=>i+1).map(n=>`<option value="${n}" ${Number(c.parcelas)===n?'selected':''}>${n}x</option>`).join('')}</select><div class="form-hint">Fernando recebe o líquido integral na data registrada, mesmo que o cliente parcele.</div></div>
+
+        <div class="form-group full">
+          <div id="ct-resumo-valores-v34" style="background:#f9fafb;border:1px solid var(--borda);border-radius:8px;padding:12px;font-size:12px"></div>
+        </div>
+
+        <div class="form-group"><label class="form-label">Início</label><input class="form-input" type="date" id="ct-inicio" value="${c.inicio||''}" onchange="calcContratoVenc()"></div>
+        <div class="form-group"><label class="form-label">Vencimento</label><input class="form-input" type="date" id="ct-venc" value="${c.venc||''}"><div class="form-hint">Editável manualmente</div></div>
+        <div class="form-group"><label class="form-label">Recebimento</label><select class="form-select" id="ct-receb"><option value="mensal" ${c.recebimento==='mensal'?'selected':''}>Mensal/recorrente</option><option value="avista" ${c.recebimento==='avista'?'selected':''}>À vista ou negociado</option></select></div>
+        <div class="form-group full"><label class="form-label">Observações</label><input class="form-input" id="ct-obs" value="${esc(c.obs||'')}"></div>
+      </div>
+
+      <div style="padding:16px 24px 20px;border-top:1px solid var(--borda);display:flex;justify-content:flex-end;gap:8px">
+        <button class="btn btn-ghost" onclick="document.getElementById('modal-contrato-overlay').remove()">Cancelar</button>
+        <button class="btn btn-primary" onclick="confirmarSalvarContratoV34('${esc(alunoId)}','${esc(contratoId||'')}')">Salvar contrato</button>
+      </div>
+    </div>
+  </div>`;
+  document.body.insertAdjacentHTML('beforeend',html);
+  calcContratoV34();
+  toggleCtCartaoV34();
+}
+window.abrirModalContrato=abrirModalContratoV34;
+abrirModalContrato=abrirModalContratoV34;
+window.renovar=function(id){abrirModalContratoV34(id);};
+
+window.alterarTotalContratoV34=function(){
+  const total=document.getElementById('ct-valor');
+  const card=document.getElementById('ct-valor-bruto');
+  if(card?.dataset.auto==='1')card.value=Number(total?.value||0).toFixed(2);
+  calcContratoV34();
+  calcCtCartaoV34();
+};
+window.igualarBrutoCartaoAoContratoV34=function(){
+  const total=Number(document.getElementById('ct-valor')?.value||0);
+  const card=document.getElementById('ct-valor-bruto');
+  if(card){card.value=total.toFixed(2);card.dataset.auto='1';}
+  calcCtCartaoV34();
+};
+window.igualarLiquidoAoTotalV34=function(){
+  const total=Number(document.getElementById('ct-valor')?.value||0);
+  const liq=document.getElementById('ct-valor-vista');
+  if(liq){liq.value=total.toFixed(2);liq.dataset.manual='1';}
+  calcContratoV34();calcCtCartaoV34();
+};
+window.calcContratoV34=function(){
+  const total=Number(document.getElementById('ct-valor')?.value||0);
+  const liq=Number(document.getElementById('ct-valor-vista')?.value||0);
+  const plano=document.getElementById('ct-plano')?.value||'mensal';
+  const meses=PLANO_MESES[plano]||1;
+  const box=document.getElementById('ct-resumo-valores-v34');
+  if(box){
+    box.innerHTML=`<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      <div><div style="font-size:10px;text-transform:uppercase;color:var(--texto-muted)">Mensal contratual bruto</div><strong>${fmtValor(total/meses)}</strong><div style="font-size:10.5px;color:var(--texto-muted)">usado na apuração de cancelamento</div></div>
+      <div><div style="font-size:10px;text-transform:uppercase;color:var(--texto-muted)">Competência líquida mensal</div><strong style="color:var(--verde)">${fmtValor(liq/meses)}</strong><div style="font-size:10.5px;color:var(--texto-muted)">valor reconhecido na DRE por ciclo</div></div>
+    </div>`;
+  }
+};
+window.calcContratoMensalidade=window.calcContratoV34;
+window.toggleCtCartaoV34=function(){
+  const forma=document.getElementById('ct-pgto')?.value;
+  ['ct-bruto-group','ct-cartao-resumo-group','ct-parcelas-group'].forEach(id=>{
+    const el=document.getElementById(id);if(el)el.style.display=forma==='Cartão'?'':'none';
+  });
+  if(forma==='Cartão'){
+    const card=document.getElementById('ct-valor-bruto');
+    if(card && !card.value){
+      card.value=Number(document.getElementById('ct-valor')?.value||0).toFixed(2);
+      card.dataset.auto='1';
+    }
+    calcCtCartaoV34();
+  }
+};
+window.toggleCtCartao=window.toggleCtCartaoV34;
+window.calcCtCartaoV34=function(){
+  const total=Number(document.getElementById('ct-valor')?.value||0);
+  const bruto=Number(document.getElementById('ct-valor-bruto')?.value||0);
+  const liquido=Number(document.getElementById('ct-valor-vista')?.value||0);
+  const taxa=Math.max(0,bruto-liquido);
+  const hint=document.getElementById('ct-cartao-hint');
+  if(hint){
+    const dif=Math.abs(bruto-total)>0.009;
+    hint.innerHTML=bruto>0&&liquido>0
+      ? `<div><strong>Cartão:</strong> ${fmtValor(bruto)} bruto → ${fmtValor(liquido)} líquido · diferença/taxa ${fmtValor(taxa)}${dif?`<div style="margin-top:4px;color:#b45309">⚠ O bruto do cartão está diferente do valor total do contrato (${fmtValor(total)}). Isso é permitido porque o campo é editável.</div>`:''}</div>`
+      :'Informe o bruto cobrado e o líquido recebido.';
+  }
+};
+window.calcCtCartao=window.calcCtCartaoV34;
+
+window.confirmarSalvarContratoV34=async function(alunoId,contratoId=''){
+  const a=alunos.find(x=>String(x.id)===String(alunoId));if(!a)return;
+  const existente=contratoId?contratos.find(c=>String(c.id)===String(contratoId)):null;
+  const plano=document.getElementById('ct-plano')?.value||'mensal';
+  const total=Number(document.getElementById('ct-valor')?.value||0);
+  const liquido=Number(document.getElementById('ct-valor-vista')?.value||0);
+  const inicio=document.getElementById('ct-inicio')?.value;
+  const venc=document.getElementById('ct-venc')?.value;
+  const forma=document.getElementById('ct-pgto')?.value||'PIX';
+
+  if(!inicio||!venc||total<=0||liquido<=0){
+    await mensagemSistemaV34('Preencha início, vencimento, valor total bruto e valor líquido do contrato.','Dados incompletos','alerta');
+    return;
+  }
+
+  let brutoCartao=null;
+  if(forma==='Cartão'){
+    brutoCartao=Number(document.getElementById('ct-valor-bruto')?.value||0);
+    if(brutoCartao<=0){
+      await mensagemSistemaV34('Informe o valor bruto cobrado no cartão.','Cartão','alerta');
+      return;
+    }
+    if(brutoCartao<liquido){
+      await mensagemSistemaV34('O valor bruto cobrado no cartão não pode ser menor que o valor líquido recebido.','Confira os valores','perigo');
+      return;
+    }
+  }
+
+  if(liquido>total){
+    const ok=await confirmarSistemaV34(
+      `O valor líquido (${fmtValor(liquido)}) está maior que o valor total/bruto do contrato (${fmtValor(total)}).\n\nIsso é incomum. Deseja salvar mesmo assim?`,
+      'Valor líquido maior que o bruto',
+      'alerta',
+      'Salvar mesmo assim'
+    );
+    if(!ok)return;
+  }
+
+  const id=contratoId||`ct_${alunoId}_${Date.now()}`;
+  const parcelas=forma==='Cartão'?(parseInt(document.getElementById('ct-parcelas')?.value)||null):null;
+  const c={
+    ...(existente||{}),
+    id,
+    alunoId:String(alunoId),
+    alunoNome:a.nome,
+    nome:document.getElementById('ct-nome')?.value.trim()||'',
+    plano,
+    valorTotal:arredV32(total),
+    valorTotalBruto:arredV32(total),
+    valorLiquidoContrato:arredV32(liquido),
+    valorVistaReferencia:arredV32(liquido),
+    valorBruto:forma==='Cartão'?arredV32(brutoCartao):null,
+    taxaCartaoValor:forma==='Cartão'?arredV32(Math.max(0,brutoCartao-liquido)):null,
+    inicio,venc,pgto:forma,
+    recebimento:document.getElementById('ct-receb')?.value||'mensal',
+    parcelas,
+    status:existente?.status||'ativo',
+    obs:document.getElementById('ct-obs')?.value.trim()||'',
+    criadoEm:existente?.criadoEm||new Date().toISOString(),
+    ts:existente?.ts||Date.now(),
+    atualizadoEm:new Date().toISOString()
+  };
+  await salvarContratoDb(c);
+  await registrarAuditoria(contratoId?'edicao_contrato':'renovacao_contrato',alunoId,a.nome,existente||{},c);
+  document.getElementById('modal-contrato-overlay')?.remove();
+  toast(contratoId?'Contrato atualizado ✓':'Novo contrato cadastrado ✓');
+  abrirPerfilAluno(alunoId);
+};
+
+// ──────────────────────────────────────────────────
+// CADASTRO INICIAL: rótulos coerentes com V34
+// ──────────────────────────────────────────────────
+const openModalAlunoBaseV34=openModalAluno;
+openModalAluno=function(id){
+  openModalAlunoBaseV34(id);
+  setTimeout(()=>{
+    const total=document.getElementById('f-valor');
+    const vista=document.getElementById('f-valor-vista');
+    if(total){
+      const g=total.closest('.form-group');
+      const l=g?.querySelector('.form-label');
+      if(l)l.textContent='Valor total do contrato — bruto (R$)';
+    }
+    if(vista){
+      const g=vista.closest('.form-group');
+      const l=g?.querySelector('.form-label');
+      if(l)l.textContent='Valor líquido / à vista de referência (R$)';
+      const h=g?.querySelector('.form-hint');
+      if(h)h.innerHTML='Valor que efetivamente fica para o Studio. Base da competência e do reembolso.';
+    }
+  },0);
+};
+window.openModalAluno=openModalAluno;
+
+// ──────────────────────────────────────────────────
+// PAGAMENTO: sugestão separada para bruto e líquido
+// ──────────────────────────────────────────────────
+const sugestaoValorMovBaseV34=sugestaoValorMovV32;
+sugestaoValorMovV32=function(c,n){
+  if(n==='contrato')return saldoLiquidoContratoV34(c);
+  return sugestaoValorMovBaseV34(c,n);
+};
+const abrirModalPagamentoBaseV34=abrirModalPagamentoContrato;
+abrirModalPagamentoContrato=function(alunoId,contratoId=null,pagamentoId=null){
+  abrirModalPagamentoBaseV34(alunoId,contratoId,pagamentoId);
+  setTimeout(()=>{
+    const cid=document.getElementById('pg-contrato-id')?.value;
+    const c=contratos.find(x=>String(x.id)===String(cid));
+    const p=pagamentoId?pagamentos.find(x=>String(x.id)===String(pagamentoId)):null;
+    const label=document.getElementById('pg-valor-label');
+    if(label)label.textContent='Valor líquido efetivamente recebido (R$)';
+    const bruto=document.getElementById('pg-valor-bruto');
+    const grupo=bruto?.closest('.form-group');
+    const lab=grupo?.querySelector('.form-label');
+    if(lab)lab.textContent='Valor cobrado do aluno no cartão — bruto';
+    if(c&&!p&&bruto){
+      bruto.value=saldoBrutoContratoV34(c).toFixed(2);
+      calcPgCartao?.();
+    }
+  },0);
+};
+window.abrirModalPagamentoContrato=abrirModalPagamentoContrato;
+registrarPagamento=async function(id){abrirModalPagamentoContrato(id);};
+window.registrarPagamento=registrarPagamento;
+
+// ──────────────────────────────────────────────────
+// CANCELAMENTO: rótulos + impressão da SIMULAÇÃO
+// ──────────────────────────────────────────────────
+const abrirCancelamentoBaseV34=window.abrirModalCancelamentoV26;
+window.abrirModalCancelamentoV26=function(alunoId,contratoId=''){
+  abrirCancelamentoBaseV34(alunoId,contratoId);
+  setTimeout(()=>{
+    const modal=document.getElementById('modal-cancelamento-v26');
+    if(!modal)return;
+
+    const total=document.getElementById('cr-total');
+    const vista=document.getElementById('cr-vista');
+
+    if(total){
+      const g=total.closest('.form-group');
+      const l=g?.querySelector('.form-label');
+      if(l)l.textContent='Valor total do contrato — bruto';
+      const h=g?.querySelector('.form-hint')||document.createElement('div');
+      if(!g?.querySelector('.form-hint')){h.className='form-hint';g?.appendChild(h);}
+      h.textContent='Base do valor mensal contratual e da multa rescisória.';
+    }
+    if(vista){
+      const g=vista.closest('.form-group');
+      const l=g?.querySelector('.form-label');
+      if(l)l.textContent='Valor líquido / à vista de referência';
+      const h=g?.querySelector('.form-hint')||document.createElement('div');
+      if(!g?.querySelector('.form-hint')){h.className='form-hint';g?.appendChild(h);}
+      h.textContent='Base máxima do reembolso e base total da competência da DRE.';
+    }
+
+    if(!document.getElementById('cr-comp-liquida-v34') && vista){
+      const cid=document.getElementById('cr-contrato-id')?.value;
+      const c=contratos.find(x=>String(x.id)===String(cid));
+      if(c){
+        const group=document.createElement('div');
+        group.className='form-group';
+        group.id='cr-comp-liquida-v34';
+        group.innerHTML=`<label class="form-label">Competência líquida mensal</label><input class="form-input" readonly value="${competenciaMensalLiquidaV34(c).toFixed(2)}"><div class="form-hint">Informativo: valor líquido ÷ meses do plano. Não altera a fórmula contratual de cancelamento.</div>`;
+        vista.closest('.form-group')?.insertAdjacentElement('afterend',group);
+      }
+    }
+
+    const footer=[...modal.querySelectorAll('div')].find(el=>{
+      const style=el.getAttribute('style')||'';
+      return style.includes('border-top') && el.querySelector('.btn-danger');
+    });
+    if(footer&&!footer.querySelector('#btn-imprimir-simulacao-v34')){
+      const btn=document.createElement('button');
+      btn.className='btn btn-ghost';
+      btn.id='btn-imprimir-simulacao-v34';
+      btn.innerHTML='🖨️ Imprimir simulação';
+      btn.onclick=()=>imprimirSimulacaoCancelamentoV34();
+      const fechar=footer.querySelector('.btn-ghost');
+      fechar?.insertAdjacentElement('afterend',btn);
+    }
+  },10);
+};
+
+window.imprimirSimulacaoCancelamentoV34=function(){
+  const alunoId=document.getElementById('cr-aluno-id')?.value;
+  const contratoId=document.getElementById('cr-contrato-id')?.value;
+  const a=alunos.find(x=>String(x.id)===String(alunoId));
+  const c=contratos.find(x=>String(x.id)===String(contratoId));
+  if(!a||!c){
+    mensagemSistemaV34('Não foi possível identificar o aluno ou o contrato da simulação.','Impressão','alerta');
+    return;
+  }
+
+  const extras=extrasModalV32();
+  const calc=calcularCancelamentoV32(c,{
+    dataCancelamento:document.getElementById('cr-data')?.value,
+    valorTotal:Number(document.getElementById('cr-total')?.value||0),
+    valorVista:Number(document.getElementById('cr-vista')?.value||0),
+    extrasTotal:extras.reduce((s,x)=>s+x.valor,0)
+  });
+  const valorAcordado=Math.max(0,Number(document.getElementById('cr-acordado')?.value||0));
+  const qtd=calc.tipoAcerto==='sem_acerto'?0:Math.max(1,Number(document.getElementById('cr-qtd')?.value||1));
+  const primeira=document.getElementById('cr-primeira')?.value||calc.dataCancelamento;
+  const parcelas=gerarParcelasAcertoV31(valorAcordado,qtd,primeira);
+  const obs=document.getElementById('cr-obs')?.value.trim()||'—';
+  const tipoLabel=calc.tipoAcerto==='reembolso'?'A reembolsar ao aluno':calc.tipoAcerto==='receber'?'A receber do aluno':'Sem valor a acertar';
+
+  const extrasRows=extras.map(e=>`<tr><td>${esc(e.descricao)}</td><td class="num">${fmtValor(e.valor)}</td></tr>`).join('');
+  const parcelasRows=parcelas.map(p=>`<tr><td>${p.numero}/${parcelas.length}</td><td>${fmtData(p.data)}</td><td class="num">${fmtValor(p.valor)}</td></tr>`).join('');
+
+  const html=`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Simulação de Cancelamento — ${esc(a.nome)}</title>
+  <style>
+    body{font-family:Arial,sans-serif;max-width:800px;margin:auto;padding:30px;color:#111}
+    .topo{display:flex;justify-content:space-between;gap:20px;border-bottom:3px solid #111;padding-bottom:15px}
+    h1{font-size:25px;margin:0}.tag{display:inline-block;background:#fffbeb;border:1px solid #f59e0b;color:#92400e;padding:6px 10px;border-radius:5px;font-weight:700;font-size:12px}
+    h2{font-size:14px;background:#111;color:#fff;padding:8px 10px;margin:22px 0 0}
+    table{width:100%;border-collapse:collapse;border:1px solid #eee}td,th{padding:8px;border-bottom:1px solid #eee}.num{text-align:right;font-weight:700}
+    .resultado{margin-top:20px;border:2px solid #D32F2F;border-radius:8px;padding:16px;display:flex;justify-content:space-between;align-items:center}
+    .nota{font-size:11px;color:#666;margin-top:15px;line-height:1.5}.btn{padding:10px 18px;background:#D32F2F;color:white;border:0;border-radius:6px;font-weight:700;margin-bottom:18px}
+    @media print{.no-print{display:none}body{padding:12px}}
+  </style></head><body>
+  <button class="btn no-print" onclick="window.print()">🖨️ Imprimir / Salvar PDF</button>
+  <div class="topo"><div><h1>Studio FB — Simulação de Cancelamento</h1><div style="margin-top:6px">${esc(a.nome)} · ${esc(nomeContrato(c))}</div></div><div class="tag">SIMULAÇÃO — NÃO CONFIRMADA</div></div>
+
+  <h2>Contrato e bases</h2><table><tbody>
+    <tr><td>Início do contrato</td><td class="num">${fmtData(c.inicio)}</td></tr>
+    <tr><td>Data simulada de cancelamento</td><td class="num">${fmtData(calc.dataCancelamento)}</td></tr>
+    <tr><td>Valor total do contrato — bruto</td><td class="num">${fmtValor(calc.valorTotal)}</td></tr>
+    <tr><td>Valor líquido / à vista de referência</td><td class="num">${fmtValor(calc.valorVista)}</td></tr>
+    <tr><td>Competência líquida mensal</td><td class="num">${fmtValor(calc.valorVista/Math.max(1,calc.mesesPlano))}</td></tr>
+    <tr><td>Valor mensal contratual bruto</td><td class="num">${fmtValor(calc.valorMensal)}</td></tr>
+  </tbody></table>
+
+  <h2>Apuração do cancelamento</h2><table><tbody>
+    <tr><td>Meses utilizados</td><td class="num">${calc.mesesUsados} de ${calc.mesesPlano}</td></tr>
+    <tr><td>Valor utilizado</td><td class="num">${fmtValor(calc.valorConsumido)}</td></tr>
+    <tr><td>Multa rescisória (${calc.percentualMulta}%)</td><td class="num">${fmtValor(calc.multaRetida)}</td></tr>
+    <tr><td>Extras / benefícios utilizados</td><td class="num">${fmtValor(calc.extrasDescontados)}</td></tr>
+    <tr><td><strong>Custo contratual apurado</strong></td><td class="num"><strong>${fmtValor(calc.totalDevidoCancelamento)}</strong></td></tr>
+    <tr><td>Reembolso teórico</td><td class="num">${fmtValor(calc.reembolsoTeorico)}</td></tr>
+    <tr><td>Total líquido efetivamente pago neste contrato</td><td class="num">${fmtValor(calc.valorPagoConsiderado)}</td></tr>
+    <tr><td>Saldo financeiro real</td><td class="num">${calc.saldoFinanceiro<0?'-':''}${fmtValor(Math.abs(calc.saldoFinanceiro))}</td></tr>
+  </tbody></table>
+
+  ${extrasRows?`<h2>Extras utilizados</h2><table><tbody>${extrasRows}</tbody></table>`:''}
+
+  <div class="resultado"><div><strong>${tipoLabel}</strong><div style="font-size:11px;color:#666;margin-top:4px">Resultado calculado da simulação</div></div><div style="font-size:25px;font-weight:800">${fmtValor(calc.valorAcertoSugerido)}</div></div>
+
+  ${parcelasRows?`<h2>Acordo simulado</h2><table><thead><tr><th>Parcela</th><th>Data prevista</th><th class="num">Valor</th></tr></thead><tbody>${parcelasRows}</tbody></table>`:''}
+  <p><strong>Valor acordado informado na simulação:</strong> ${fmtValor(valorAcordado)}</p>
+  <p><strong>Observações:</strong> ${esc(obs)}</p>
+  <div class="nota"><strong>Importante:</strong> esta impressão é apenas uma simulação. O contrato permanece ativo até a confirmação do cancelamento no sistema. A simulação não cria lançamento na DRE nem no caixa.</div>
+  </body></html>`;
+
+  const w=window.open('','_blank');
+  if(!w){
+    mensagemSistemaV34('O navegador bloqueou a janela de impressão. Libere pop-ups para o Studio FB e tente novamente.','Impressão bloqueada','alerta');
+    return;
+  }
+  w.document.write(html);w.document.close();
+};
+
+// Confirmação do cancelamento com modal do próprio sistema.
+window.confirmarCancelamentoV32=async function(){
+  const alunoId=document.getElementById('cr-aluno-id')?.value;
+  const contratoId=document.getElementById('cr-contrato-id')?.value;
+  const a=alunos.find(x=>String(x.id)===String(alunoId));
+  const c=contratos.find(x=>String(x.id)===String(contratoId));
+  if(!a||!c)return;
+
+  const data=document.getElementById('cr-data')?.value;
+  const extrasItens=extrasModalV32();
+  const calc=calcularCancelamentoV32(c,{
+    dataCancelamento:data,
+    valorTotal:Number(document.getElementById('cr-total')?.value||0),
+    valorVista:Number(document.getElementById('cr-vista')?.value||0),
+    extrasTotal:extrasItens.reduce((s,x)=>s+x.valor,0)
+  });
+  const valorAcordado=Math.max(0,Number(document.getElementById('cr-acordado')?.value||0));
+  const qtd=calc.tipoAcerto==='sem_acerto'?0:Math.max(1,Number(document.getElementById('cr-qtd')?.value||1));
+  const primeira=document.getElementById('cr-primeira')?.value||data;
+  const parcelas=gerarParcelasAcertoV31(valorAcordado,qtd,primeira);
+
+  const ok=await confirmarSistemaV34(
+    `Aluno: ${a.nome}\nData do cancelamento: ${fmtData(data)}\nResultado: ${labelTipoAcertoV31(calc.tipoAcerto)} — ${fmtValor(valorAcordado)}\n\nO contrato será encerrado e a apuração ficará registrada. Nenhum lançamento será criado automaticamente na DRE ou no caixa.`,
+    'Confirmar cancelamento',
+    'perigo',
+    'Confirmar cancelamento'
+  );
+  if(!ok)return;
+
+  const snapshot=pagamentosDoContrato(c.id).map(p=>({
+    id:p.id,data:p.data,valor:Number(p.valor||0),valorBruto:Number(p.valorBruto||0),
+    forma:p.forma||'',descricao:p.descricao||''
+  }));
+  const cancelamento={
+    status:'confirmado',...calc,extrasItens,
+    valorAcertoAcordado:arredV32(valorAcordado),
+    valorReembolsado:calc.tipoAcerto==='reembolso'?arredV32(valorAcordado):0,
+    valorAReceber:calc.tipoAcerto==='receber'?arredV32(valorAcordado):0,
+    qtdParcelas:qtd,dataPrimeiraParcela:primeira,parcelasAcerto:parcelas,
+    pagamentosSnapshot:snapshot,
+    observacao:document.getElementById('cr-obs')?.value.trim()||'',
+    semLancamentoFinanceiroAutomatico:true,
+    criadoEm:new Date().toISOString(),ts:Date.now()
+  };
+  const atualizado={...c,status:'cancelado',cancelamento,vencOriginal:c.vencOriginal||c.venc,atualizadoEm:new Date().toISOString()};
+  await salvarContratoDb(atualizado);
+  await setDoc(doc(db,'cancelamentos_reembolsos',String(contratoId)),{
+    id:String(contratoId),contratoId:String(contratoId),alunoId:String(alunoId),alunoNome:a.nome,...cancelamento
+  });
+  const hist={
+    id:`hist_cancel_${contratoId}_${Date.now()}`,alunoId:String(alunoId),alunoNome:a.nome,
+    contratoId:String(contratoId),tipo:'cancelamento_contrato',data,
+    valor:cancelamento.valorAcertoAcordado,tipoAcerto:cancelamento.tipoAcerto,
+    descricao:'Cancelamento de contrato',status:'ativo',ts:Date.now()
+  };
+  await setDoc(doc(db,'historico',hist.id),hist);
+  await registrarAuditoria('cancelamento_contrato',alunoId,a.nome,{}, {contratoId,cancelamento});
+
+  document.getElementById('modal-cancelamento-v26')?.remove();
+  hidratarAlunosComContratos();
+  toast('Contrato cancelado e apuração registrada ✓');
+  abrirPerfilAluno(alunoId);
+};
+window.confirmarCancelamentoReembolsoV26=window.confirmarCancelamentoV32;
+
+// ──────────────────────────────────────────────────
+// PERFIL: explicitar bruto, líquido e saldo
+// ──────────────────────────────────────────────────
+const abrirPerfilBaseV34=abrirPerfilAluno;
+abrirPerfilAluno=async function(id){
+  await abrirPerfilBaseV34(id);
+  setTimeout(()=>{
+    document.querySelectorAll('.valores-contrato-v33').forEach(el=>el.remove());
+    document.querySelectorAll('[data-cancelamento-v29],.btn-cancelamento-v26').forEach(btn=>{
+      const oc=btn.getAttribute('onclick')||'';
+      const m=oc.match(/abrirModalCancelamentoV26\('([^']+)','([^']+)'\)/);
+      const cid=m?.[2]||btn.dataset.cancelamentoV29;
+      const c=contratos.find(x=>String(x.id)===String(cid));
+      const td=btn.closest('td');
+      if(!c||!td||td.querySelector('.valores-contrato-v34'))return;
+      const info=document.createElement('div');
+      info.className='valores-contrato-v34';
+      info.style.cssText='font-size:10.5px;color:var(--texto-muted);margin-top:6px;line-height:1.4';
+      info.innerHTML=`Bruto contrato: <strong>${fmtValor(valorTotalBrutoContratoV34(c))}</strong><br>Líquido / base DRE: <strong>${fmtValor(valorLiquidoContratoV34(c))}</strong>`;
+      td.appendChild(info);
+    });
+  },0);
+};
+window.abrirPerfilAluno=abrirPerfilAluno;
