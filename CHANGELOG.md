@@ -45,3 +45,16 @@
 - Recebimento líquido continua separado para DRE/caixa.
 - Perfil diferencia "Recebido líquido" de "Saldo contratual".
 - Progresso deixa de mostrar falso saldo correspondente à taxa do cartão.
+
+
+## V37.6
+- Nota Fiscal integrada definitivamente ao Financeiro atual.
+- Filtros de NF permanecem visíveis ao trocar mês e reabrir o Financeiro.
+- Estados fiscais separados: A emitir, Emitida, NF integral e Não se aplica.
+- Política de NF configurável por contrato.
+- Receita avulsa recebe configuração de NF.
+- Falha de leitura de `notas_fiscais` volta a tentar em vez de congelar o cache.
+- Confirmações de despesas anteriores a setembro migradas como histórico.
+- Agosto recebe conciliação histórica baseada no consolidado validado.
+- Confirmações históricas não movimentam o Caixa nem alteram os saldos de abertura.
+- Setembro em diante mantém confirmação operacional real.

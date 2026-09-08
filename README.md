@@ -82,3 +82,36 @@ Exemplo:
 - líquido recebido: R$ 5.019,63.
 
 O contrato passa a ser exibido como **Vigente e quitado**, com saldo contratual R$ 0,00.
+
+
+## V37.6 — Nota Fiscal e despesas históricas
+
+### Nota Fiscal
+O controle de NF passa a fazer parte nativa da tabela auditável do Financeiro em regime de competência.
+
+Filtros permanentes:
+- Todas
+- A emitir
+- Emitidas
+- NF integral
+- Não se aplica
+
+O filtro não recria a tabela e não remove os controles de rastreamento.
+
+Cada contrato pode definir sua política padrão:
+- emitir por competência;
+- NF integral já emitida;
+- não se aplica.
+
+Receitas avulsas também podem definir a situação fiscal no cadastro.
+
+### Despesas históricas
+A data de corte do Caixa escritural continua sendo 31/08/2026.
+
+- competências até agosto/2026 são confirmadas como histórico;
+- confirmações históricas têm `impactaCaixa: false`;
+- agosto documenta as datas da InfinitePay conhecidas no consolidado;
+- pagamentos cuja origem não foi documentada permanecem confirmados como histórico, sem conta inventada;
+- setembro/2026 em diante exige baixa real com data e conta.
+
+Portanto, a migração histórica não altera o saldo de abertura já informado para InfinitePay, Banco de Tesouraria ou Espécie.

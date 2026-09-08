@@ -11760,3 +11760,622 @@ window.diagnosticoContratoV375=function(contratoId){
     status:statusContratoObj(c)
   };
 };
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// V37.6 — NOTA FISCAL NATIVA + CONFIRMAÇÃO HISTÓRICA DE DESPESAS
+//
+// NF:
+// - filtro permanente na tabela Financeiro/Competência;
+// - não usa mais o renderizador legado que substituía a tabela auditável;
+// - estados: a emitir, emitida, coberta por NF integral, não se aplica;
+// - política fiscal configurável no contrato;
+// - modal do Studio, sem confirm() nativo;
+// - falha de leitura do Firebase não trava cache para sempre.
+//
+// DESPESAS:
+// - competências até 31/08/2026 são confirmadas como HISTÓRICO;
+// - confirmação histórica NÃO gera movimento de Caixa;
+// - agosto recebe as datas/conta InfinitePay conciliadas no consolidado;
+// - setembro/2026 em diante continua exigindo baixa real.
+// ═══════════════════════════════════════════════════════════════════════════════
+const VERSAO_FINANCEIRO_V376 = '37.6';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NOTA FISCAL V37.6
+// ─────────────────────────────────────────────────────────────────────────────
+let nfFiltroV376 = 'todas';
+let nfErroLeituraV376 = '';
+
+function normalizarStatusNFV376(status,motivo=''){
+  if(status==='integral'||status==='nao_aplica') return status;
+  if(status==='emitida' && motivo==='nota_integral_ja_emitida') return 'integral';
+  if(status==='emitida' && motivo==='sem_cobranca') return 'nao_aplica';
+  if(status==='emitida') return 'emitida';
+  return 'a_emitir';
+}
+function metaStatusNFV376(status){
+  return ({
+    a_emitir:{label:'🧾 A emitir',cor:'#92400e',bg:'#fff7ed',borda:'#fed7aa'},
+    emitida:{label:'✅ Emitida',cor:'#166534',bg:'#f0fdf4',borda:'#bbf7d0'},
+    integral:{label:'📄 NF integral',cor:'#1d4ed8',bg:'#eff6ff',borda:'#bfdbfe'},
+    nao_aplica:{label:'— Não se aplica',cor:'#6b7280',bg:'#f9fafb',borda:'#e5e7eb'}
+  })[status]||{label:status,cor:'#6b7280',bg:'#f9fafb',borda:'#e5e7eb'};
+}
+function politicaContratoNFV376(c){
+  const p=String(c?.nfPolitica||'').trim();
+  if(['mensal','integral','nao_aplica'].includes(p)) return p;
+
+  // Compatibilidade histórica: apenas listas explicitamente validadas.
+  const nome=normalizarNomeNFV24(c?.alunoNome||'');
+  if(NF_SEM_COBRANCA_V24.has(nome)) return 'nao_aplica';
+  if(NF_INTEGRAL_JA_EMITIDA_V24.has(nome)) return 'integral';
+  return 'mensal';
+}
+function statusPadraoItemNFV376(item){
+  if(item.tipo==='contrato'){
+    const p=politicaContratoNFV376(item.contrato);
+    if(p==='integral') return {statusNF:'integral',motivoNF:'nota_integral_ja_emitida',salvo:false};
+    if(p==='nao_aplica') return {statusNF:'nao_aplica',motivoNF:'nao_aplica',salvo:false};
+    return {statusNF:'a_emitir',motivoNF:'pendente_emissao',salvo:false};
+  }
+  if(item.receitaAvulsa){
+    const p=String(item.receitaAvulsa.nfPolitica||'').trim();
+    if(p==='emitida') return {statusNF:'emitida',motivoNF:'nota_mensal_emitida',salvo:false};
+    if(p==='nao_aplica') return {statusNF:'nao_aplica',motivoNF:'nao_aplica',salvo:false};
+  }
+  return {statusNF:'a_emitir',motivoNF:'pendente_emissao',salvo:false};
+}
+
+carregarNotasFiscaisV24 = async function(forcar=false){
+  if(notasFiscaisCarregadasV24 && !forcar) return notasFiscaisCacheV24;
+  try{
+    const snap=await getDocs(collection(db,'notas_fiscais'));
+    notasFiscaisCacheV24={};
+    snap.forEach(d=>{notasFiscaisCacheV24[d.id]=d.data();});
+    notasFiscaisCarregadasV24=true;
+    nfErroLeituraV376='';
+  }catch(e){
+    console.warn('[NF V37.6] Não foi possível carregar notas fiscais:',e);
+    nfErroLeituraV376=String(e?.message||e||'Erro de leitura');
+    // Importante: mantém false para tentar novamente na próxima abertura.
+    notasFiscaisCarregadasV24=false;
+  }
+  return notasFiscaisCacheV24;
+};
+
+regraPadraoNFContratoV24 = function(c,mes,ano){
+  const p=politicaContratoNFV376(c);
+  if(p==='integral') return {statusNF:'integral',motivoNF:'nota_integral_ja_emitida'};
+  if(p==='nao_aplica') return {statusNF:'nao_aplica',motivoNF:'nao_aplica'};
+  return {statusNF:'a_emitir',motivoNF:'pendente_emissao'};
+};
+
+obterStatusNFItemV24 = function(item){
+  const salvo=notasFiscaisCacheV24[item.key];
+  if(salvo?.statusNF){
+    return {
+      statusNF:normalizarStatusNFV376(salvo.statusNF,salvo.motivoNF),
+      motivoNF:salvo.motivoNF||'manual',
+      salvo:true,
+      dados:salvo
+    };
+  }
+  return statusPadraoItemNFV376(item);
+};
+
+motivoNFTextoV24 = function(motivo){
+  return ({
+    pendente_emissao:'Pendente de emissão para esta competência.',
+    nota_mensal_emitida:'Nota desta competência marcada como emitida.',
+    nota_integral_ja_emitida:'Competência coberta por nota fiscal integral.',
+    sem_cobranca:'Legado: sem cobrança.',
+    nao_aplica:'Controle fiscal marcado como não aplicável.',
+    manual:'Status ajustado manualmente.'
+  })[motivo]||'Controle de nota fiscal.';
+};
+
+chipNFV24 = function(item){
+  const st=obterStatusNFItemV24(item);
+  const meta=metaStatusNFV376(st.statusNF);
+  return `<button class="nf-chip-v24" type="button"
+    title="${esc(motivoNFTextoV24(st.motivoNF))} Clique para configurar."
+    onclick='abrirStatusNFV376(${JSON.stringify(item.tipo)},${JSON.stringify(item.origemId)},${item.mes},${item.ano})'
+    style="color:${meta.cor};background:${meta.bg};border-color:${meta.borda}">${meta.label}</button>`;
+};
+
+resumoNotasFiscaisV24 = function(){
+  const itens=itensReceitaCompetenciaNFV24(finMes,finAno);
+  const out={
+    itens,
+    qtdEmitir:0,qtdEmitida:0,valEmitir:0,valEmitida:0,
+    qtdIntegral:0,valIntegral:0,qtdNaoAplica:0,valNaoAplica:0
+  };
+  itens.forEach(item=>{
+    const st=obterStatusNFItemV24(item).statusNF;
+    const v=Number(item.valor||0);
+    if(st==='a_emitir'){out.qtdEmitir++;out.valEmitir+=v;}
+    else{
+      out.qtdEmitida++;out.valEmitida+=v; // compatibilidade com cards existentes: "sem pendência"
+      if(st==='emitida'){}
+      else if(st==='integral'){out.qtdIntegral++;out.valIntegral+=v;}
+      else if(st==='nao_aplica'){out.qtdNaoAplica++;out.valNaoAplica+=v;}
+    }
+  });
+  return out;
+};
+
+function itemNFPorChaveV376(tipo,origemId,mes,ano){
+  const key=chaveNFV24(tipo,origemId,mes,ano);
+  return itensReceitaCompetenciaNFV24(mes,ano).find(i=>i.key===key)||null;
+}
+
+window.abrirStatusNFV376=function(tipo,origemId,mes,ano){
+  const item=itemNFPorChaveV376(tipo,origemId,Number(mes),Number(ano));
+  if(!item)return;
+  const st=obterStatusNFItemV24(item);
+  const dados=st.dados||{};
+  document.getElementById('modal-nf-v376')?.remove();
+
+  const html=`<div class="overlay open" id="modal-nf-v376" style="z-index:880">
+    <div class="modal" style="max-width:560px">
+      <div class="modal-header">
+        <div><div class="modal-title">Nota Fiscal</div><div style="font-size:12px;color:var(--texto-muted)">${esc(item.alunoNome||item.descricao||'Receita')} · ${MESES_NOMES[Number(mes)]} ${ano}</div></div>
+        <button class="modal-close" onclick="document.getElementById('modal-nf-v376').remove()">✕</button>
+      </div>
+      <div class="modal-body">
+        <div style="background:#f9fafb;border:1px solid var(--borda);border-radius:8px;padding:10px 12px;margin-bottom:14px">
+          <strong>${esc(item.descricao||'Receita')}</strong>
+          <div style="font-size:12px;color:var(--texto-muted);margin-top:3px">${fmtValor(item.valor)} · origem ${esc(item.tipo)} / ${esc(item.origemId)}</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Situação fiscal desta competência</label>
+          <select class="form-select" id="nf-status-v376">
+            <option value="a_emitir" ${st.statusNF==='a_emitir'?'selected':''}>A emitir</option>
+            <option value="emitida" ${st.statusNF==='emitida'?'selected':''}>Emitida</option>
+            <option value="integral" ${st.statusNF==='integral'?'selected':''}>Coberta por NF integral</option>
+            <option value="nao_aplica" ${st.statusNF==='nao_aplica'?'selected':''}>Não se aplica</option>
+          </select>
+        </div>
+        <div class="form-grid" style="grid-template-columns:1fr 1fr">
+          <div class="form-group"><label class="form-label">Data da emissão (opcional)</label><input class="form-input" type="date" id="nf-data-v376" value="${esc(dados.dataEmissao||'')}"></div>
+          <div class="form-group"><label class="form-label">Número da NF (opcional)</label><input class="form-input" id="nf-numero-v376" value="${esc(dados.numeroNF||'')}"></div>
+          <div class="form-group full"><label class="form-label">Observação</label><input class="form-input" id="nf-obs-v376" value="${esc(dados.observacao||'')}"></div>
+        </div>
+        ${item.tipo==='contrato'?`<div style="margin-top:12px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:10px 12px;font-size:12px;color:#1e40af">A política padrão deste contrato é <strong>${politicaContratoNFV376(item.contrato)==='integral'?'NF integral':politicaContratoNFV376(item.contrato)==='nao_aplica'?'não se aplica':'emitir por competência'}</strong>. Esta alteração vale somente para a competência selecionada.</div>`:''}
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" onclick="document.getElementById('modal-nf-v376').remove()">Cancelar</button>
+        <button class="btn btn-primary" onclick='salvarStatusNFV376(${JSON.stringify(tipo)},${JSON.stringify(origemId)},${Number(mes)},${Number(ano)})'>Salvar situação</button>
+      </div>
+    </div>
+  </div>`;
+  document.body.insertAdjacentHTML('beforeend',html);
+};
+
+window.salvarStatusNFV376=async function(tipo,origemId,mes,ano){
+  const item=itemNFPorChaveV376(tipo,origemId,mes,ano);if(!item)return;
+  const status=document.getElementById('nf-status-v376')?.value||'a_emitir';
+  const key=item.key;
+  const motivo= status==='emitida'?'nota_mensal_emitida':
+    status==='integral'?'nota_integral_ja_emitida':
+    status==='nao_aplica'?'nao_aplica':'pendente_emissao';
+  const reg={
+    id:key,tipoOrigem:tipo,origemId:String(origemId),
+    alunoId:item.alunoId||'',alunoNome:item.alunoNome||'',
+    competencia:competenciaNFV24(mes,ano),mes:Number(mes),ano:Number(ano),
+    valor:Number(item.valor||0),statusNF:status,motivoNF:motivo,
+    dataEmissao:document.getElementById('nf-data-v376')?.value||'',
+    numeroNF:document.getElementById('nf-numero-v376')?.value.trim()||'',
+    observacao:document.getElementById('nf-obs-v376')?.value.trim()||'',
+    atualizadoEm:new Date().toISOString(),ts:Date.now()
+  };
+  try{
+    await setDoc(doc(db,'notas_fiscais',key),reg);
+    notasFiscaisCacheV24[key]=reg;
+    notasFiscaisCarregadasV24=true;
+    await registrarAuditoria('nota_fiscal_status',item.alunoId||'',item.alunoNome||'',{},reg);
+    document.getElementById('modal-nf-v376')?.remove();
+    toast('Situação da nota fiscal atualizada ✓');
+    await renderFinanceiroView();
+  }catch(e){
+    console.error(e);
+    mensagemSistemaV34('Não foi possível salvar a situação fiscal.','Nota Fiscal','perigo');
+  }
+};
+
+// Compatibilidade: qualquer chamada antiga passa a abrir/gravar pelo modelo novo.
+window.alternarNFV24=async function(tipo,origemId,mes,ano,novoStatus){
+  const item=itemNFPorChaveV376(tipo,origemId,mes,ano);if(!item)return;
+  const status=novoStatus==='emitida'?'emitida':'a_emitir';
+  const key=item.key;
+  const reg={id:key,tipoOrigem:tipo,origemId:String(origemId),alunoId:item.alunoId||'',alunoNome:item.alunoNome||'',competencia:competenciaNFV24(mes,ano),mes:Number(mes),ano:Number(ano),valor:Number(item.valor||0),statusNF:status,motivoNF:status==='emitida'?'nota_mensal_emitida':'pendente_emissao',atualizadoEm:new Date().toISOString(),ts:Date.now()};
+  await setDoc(doc(db,'notas_fiscais',key),reg);
+  notasFiscaisCacheV24[key]=reg;
+  await renderFinanceiroView();
+};
+
+function localizarBoxReceitaCompetenciaV376(){
+  return [...document.querySelectorAll('#content .section-box')].find(el=>{
+    const t=(el.querySelector('.section-title')?.textContent||'').toLowerCase();
+    return t.includes('receita')&&t.includes('compet');
+  })||null;
+}
+function aplicarNFFinanceiroV376(){
+  if(financeiroModo!=='competencia')return;
+  const box=localizarBoxReceitaCompetenciaV376();if(!box)return;
+  const itens=itensReceitaCompetenciaNFV24(finMes,finAno);
+  const estados={todas:itens.length,a_emitir:0,emitida:0,integral:0,nao_aplica:0};
+  const valores={todas:0,a_emitir:0,emitida:0,integral:0,nao_aplica:0};
+  itens.forEach(i=>{
+    const st=obterStatusNFItemV24(i).statusNF;
+    estados[st]=(estados[st]||0)+1;
+    valores[st]=(valores[st]||0)+Number(i.valor||0);
+    valores.todas+=Number(i.valor||0);
+  });
+
+  let toolbar=box.querySelector('.nf-toolbar-v376');
+  const labels={todas:'Todas',a_emitir:'A emitir',emitida:'Emitidas',integral:'NF integral',nao_aplica:'Não se aplica'};
+  const botoes=Object.keys(labels).map(f=>`<button class="btn ${nfFiltroV376===f?'btn-primary':'btn-ghost'} btn-sm" onclick="setFiltroNFV376('${f}')">${labels[f]} <span style="opacity:.75">(${estados[f]||0})</span></button>`).join('');
+  const aviso=nfErroLeituraV376?`<div style="font-size:11px;color:var(--vermelho);margin-top:7px">⚠ A leitura do controle de NF falhou; o sistema tentará novamente na próxima abertura.</div>`:'';
+  const html=`<div>
+    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap"><span style="font-size:10.5px;font-weight:800;letter-spacing:1px;color:var(--texto-muted);margin-right:3px">NOTA FISCAL</span>${botoes}</div>
+    <div class="nf-filtro-resumo-v376" style="font-size:11px;color:var(--texto-muted);margin-top:6px"></div>${aviso}
+  </div>`;
+  if(!toolbar){
+    toolbar=document.createElement('div');
+    toolbar.className='nf-toolbar-v376';
+    toolbar.style.cssText='padding:12px 16px;border-bottom:1px solid var(--borda);background:#fcfcfc';
+    const tableWrap=box.querySelector('.table-wrap');
+    if(tableWrap)tableWrap.insertAdjacentElement('beforebegin',toolbar);
+  }
+  toolbar.innerHTML=html;
+
+  const tbody=box.querySelector('tbody');
+  if(!tbody)return;
+  tbody.querySelectorAll('.nf-empty-v376').forEach(x=>x.remove());
+  const rows=[...tbody.children].filter(r=>r.tagName==='TR');
+  let vis=0,totalVis=0;
+  rows.forEach((row,idx)=>{
+    const item=itens[idx];
+    if(!item){row.style.display='';return;}
+    const st=obterStatusNFItemV24(item).statusNF;
+    row.dataset.nfStatus=st;
+    row.dataset.nfKey=item.key;
+    const mostrar=nfFiltroV376==='todas'||st===nfFiltroV376;
+    row.style.display=mostrar?'':'none';
+    if(mostrar){vis++;totalVis+=Number(item.valor||0);}
+  });
+  if(!vis&&itens.length){
+    const tr=document.createElement('tr');tr.className='nf-empty-v376';
+    tr.innerHTML='<td colspan="5"><div class="empty">Nenhuma receita neste filtro de nota fiscal.</div></td>';
+    tbody.appendChild(tr);
+  }
+  const resumo=toolbar.querySelector('.nf-filtro-resumo-v376');
+  if(resumo)resumo.textContent=`Exibindo ${vis} de ${itens.length} receita(s) · ${fmtValor(totalVis)}`;
+}
+window.setFiltroNFV376=function(filtro){
+  nfFiltroV376=['todas','a_emitir','emitida','integral','nao_aplica'].includes(filtro)?filtro:'todas';
+  aplicarNFFinanceiroV376();
+};
+// Impede o renderizador legado de substituir a tabela financeira atual.
+window.setFiltroNFV24=window.setFiltroNFV376;
+renderTabelaReceitaNFV24=function(){aplicarNFFinanceiroV376();};
+aplicarNotaFiscalFinanceiroV24=function(){aplicarNFFinanceiroV376();};
+
+// Política fiscal no contrato.
+const abrirModalContratoBaseV376=abrirModalContrato;
+abrirModalContrato=function(alunoId,contratoId=null){
+  abrirModalContratoBaseV376(alunoId,contratoId);
+  setTimeout(()=>{
+    const modal=document.getElementById('modal-contrato-overlay');if(!modal||document.getElementById('ct-nf-politica-v376'))return;
+    const c=contratoId?contratos.find(x=>String(x.id)===String(contratoId)):null;
+    const p=c?politicaContratoNFV376(c):'mensal';
+    const obs=document.getElementById('ct-obs')?.closest('.form-group');
+    const g=document.createElement('div');g.className='form-group full';g.id='ct-nf-politica-v376';
+    g.innerHTML=`<div style="border:1px solid var(--borda);border-radius:8px;padding:12px;background:#fafafa">
+      <div class="form-label" style="margin-bottom:8px">Tratamento de nota fiscal</div>
+      <div class="form-grid" style="grid-template-columns:1fr 1fr">
+        <div class="form-group"><label class="form-label">Política padrão</label><select class="form-select" id="ct-nf-politica">
+          <option value="mensal" ${p==='mensal'?'selected':''}>Emitir por competência</option>
+          <option value="integral" ${p==='integral'?'selected':''}>NF integral já emitida</option>
+          <option value="nao_aplica" ${p==='nao_aplica'?'selected':''}>Não se aplica</option>
+        </select></div>
+        <div class="form-group"><label class="form-label">Data da NF integral (opcional)</label><input class="form-input" type="date" id="ct-nf-data" value="${esc(c?.nfDataIntegral||'')}"></div>
+        <div class="form-group full"><label class="form-label">Número / observação da NF integral</label><input class="form-input" id="ct-nf-numero" value="${esc(c?.nfNumeroIntegral||'')}"></div>
+      </div>
+      <div class="form-hint">A política define o estado padrão das competências; uma competência individual ainda pode ser ajustada no Financeiro.</div>
+    </div>`;
+    if(obs)obs.insertAdjacentElement('beforebegin',g);
+    else modal.querySelector('.modal-body')?.appendChild(g);
+  },0);
+};
+window.abrirModalContrato=abrirModalContrato;
+
+const salvarContratoDbBaseV376=salvarContratoDb;
+salvarContratoDb=async function(c){
+  const p=document.getElementById('ct-nf-politica');
+  if(p){
+    c.nfPolitica=p.value||'mensal';
+    c.nfDataIntegral=document.getElementById('ct-nf-data')?.value||'';
+    c.nfNumeroIntegral=document.getElementById('ct-nf-numero')?.value.trim()||'';
+  }else if(!c.nfPolitica){
+    c.nfPolitica='mensal';
+  }
+  return salvarContratoDbBaseV376(c);
+};
+
+// Política fiscal em receita avulsa.
+const abrirReceitaAvulsaBaseV376=window.abrirModalReceitaAvulsaV35;
+window.abrirModalReceitaAvulsaV35=function(id=''){
+  abrirReceitaAvulsaBaseV376(id);
+  setTimeout(()=>{
+    const modal=document.getElementById('modal-receita-avulsa-v35');if(!modal||document.getElementById('ra-nf-v376'))return;
+    const r=id?receitasAvulsasV35.find(x=>String(x.id)===String(id)):null;
+    const obs=document.getElementById('ra-obs-v35')?.closest('.form-group');
+    const g=document.createElement('div');g.className='form-group';g.id='ra-nf-v376';
+    g.innerHTML=`<label class="form-label">Nota fiscal</label><select class="form-select" id="ra-nf-politica-v376">
+      <option value="a_emitir" ${(r?.nfPolitica||'a_emitir')==='a_emitir'?'selected':''}>A emitir</option>
+      <option value="emitida" ${r?.nfPolitica==='emitida'?'selected':''}>Emitida</option>
+      <option value="nao_aplica" ${r?.nfPolitica==='nao_aplica'?'selected':''}>Não se aplica</option>
+    </select>`;
+    if(obs)obs.insertAdjacentElement('beforebegin',g);
+  },0);
+};
+const salvarReceitaAvulsaBaseV376=salvarReceitaAvulsaV35;
+salvarReceitaAvulsaV35=async function(r){
+  const p=document.getElementById('ra-nf-politica-v376');
+  if(p)r.nfPolitica=p.value||'a_emitir';
+  return salvarReceitaAvulsaBaseV376(r);
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DESPESAS HISTÓRICAS V37.6
+// ─────────────────────────────────────────────────────────────────────────────
+let migracaoHistDespPromiseV376=null;
+let resumoMigracaoHistV376=null;
+
+function normalizarDescHistV376(s){
+  return String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
+}
+function dadosAgostoDespV376(desc){
+  const n=normalizarDescHistV376(desc);
+  const mapa=[
+    {test:x=>x.includes('contadora'),data:'2026-08-10',conta:'InfinitePay'},
+    {test:x=>x.includes('simples nacional')&&!x.includes('darf'),data:'2026-08-10',conta:'InfinitePay'},
+    {test:x=>x.includes('aniversario de aluno'),data:'2026-08-10',conta:'InfinitePay'},
+    {test:x=>x.includes('pro labore'),data:'2026-08-11',conta:'InfinitePay'},
+    {test:x=>x.includes('darf')&&x.includes('simples'),data:'2026-08-12',conta:'InfinitePay'},
+    {test:x=>x.includes('capsulas de cafe')||x.includes('capsula de cafe'),data:'2026-08-26',conta:'InfinitePay'},
+    {test:x=>x.includes('elasticos reposicao')||x.includes('elastico reposicao'),data:'2026-08-26',conta:'InfinitePay'}
+  ];
+  const achou=mapa.find(m=>m.test(n));
+  if(achou)return {...achou,origem:'InfinitePay conciliada'};
+  return {data:'',conta:'',origem:'Origem financeira histórica não documentada'};
+}
+function confirmacaoHistoricaDespV376(ref){
+  return (caixaMovs||[]).find(m=>m.status!=='excluido'&&m.tipo==='confirmacao_despesa_historica'&&String(m.despesaRef)===String(ref))||null;
+}
+function statusConfirmacaoDespV376(ref){
+  const real=movDespV32(ref);
+  if(real)return {tipo:'real',mov:real};
+  const hist=confirmacaoHistoricaDespV376(ref);
+  if(hist)return {tipo:'historico',mov:hist};
+  return {tipo:'pendente',mov:null};
+}
+
+async function mesesDespesasExistentesAteAgoV376(){
+  const out=[];
+  try{
+    const snap=await getDocs(collection(db,'despesas'));
+    snap.forEach(d=>{
+      const m=String(d.id).match(/^(\d{4})_(\d{2})$/);
+      if(!m)return;
+      const ano=Number(m[1]),mes=Number(m[2]);
+      if(mes<0||mes>11)return;
+      if(ano<2026 || (ano===2026&&mes<=7))out.push({ano,mes});
+    });
+  }catch(e){
+    console.warn('[Despesas V37.6] Falha ao listar meses históricos:',e);
+  }
+  return out.sort((a,b)=>a.ano-b.ano||a.mes-b.mes);
+}
+async function executarMigracaoDespesasHistoricasV376(forcar=false){
+  if(migracaoHistDespPromiseV376&&!forcar)return migracaoHistDespPromiseV376;
+  migracaoHistDespPromiseV376=(async()=>{
+    await carregarMovCaixa();
+    if(!forcar){
+      try{
+        const mark=await getDoc(doc(db,'config','migracao_despesas_historicas_v376'));
+        if(mark.exists()&&mark.data()?.concluida){
+          resumoMigracaoHistV376=mark.data();
+          return resumoMigracaoHistV376;
+        }
+      }catch(e){}
+    }
+
+    const meses=await mesesDespesasExistentesAteAgoV376();
+    const novos=[];
+    let totalHistorico=0,totalAgo=0,totalAgoInfinite=0,qtdAgo=0;
+
+    for(const {mes,ano} of meses){
+      const itens=await itensDespV32(mes,ano);
+      for(const i of itens){
+        const jaReal=movDespV32(i.ref);
+        const jaHist=confirmacaoHistoricaDespV376(i.ref);
+        if(jaReal||jaHist)continue;
+
+        const agosto=(ano===2026&&mes===7);
+        const dado=agosto?dadosAgostoDespV376(i.descricao):{data:'',conta:'',origem:'Confirmação histórica anterior ao marco do Caixa'};
+        const id=`hist_desp_${hashV32(i.ref)}`;
+        const mov={
+          id,tipo:'confirmacao_despesa_historica',despesaRef:i.ref,
+          competencia:i.competencia,descricao:i.descricao,cat:i.cat,
+          valor:arredV32(i.valor),status:'ativo',
+          historico:true,impactaCaixa:false,
+          data:'2026-08-31',
+          dataPagamentoHistorica:dado.data||'',
+          contaHistorica:dado.conta||'',
+          origemFinanceiraHistorica:dado.origem,
+          metodoConfirmacao:'migracao_v376',
+          observacao:agosto
+            ?'Confirmação histórica de agosto. Não gera Caixa porque o saldo de abertura em 31/08 já incorpora estas saídas.'
+            :'Confirmação histórica em lote. Não reconstrói Caixa retroativo.',
+          criadoEm:new Date().toISOString(),ts:Date.now()+novos.length
+        };
+        novos.push(mov);totalHistorico+=Number(i.valor||0);
+        if(agosto){
+          qtdAgo++;totalAgo+=Number(i.valor||0);
+          if(dado.conta==='InfinitePay')totalAgoInfinite+=Number(i.valor||0);
+        }
+      }
+    }
+
+    // Batches menores que o limite do Firestore.
+    for(let p=0;p<novos.length;p+=350){
+      const batch=writeBatch(db);
+      novos.slice(p,p+350).forEach(m=>batch.set(doc(db,'caixa_movimentacoes',String(m.id)),m));
+      await batch.commit();
+    }
+    caixaMovs=[...(caixaMovs||[]),...novos];
+
+    const resumo={
+      concluida:true,versao:'37.6',
+      corte:'2026-08-31',
+      impactoCaixa:false,
+      qtdConfirmacoes:novos.length,
+      totalConfirmado:Number(totalHistorico.toFixed(2)),
+      agostoQtd:qtdAgo,
+      agostoTotal:Number(totalAgo.toFixed(2)),
+      agostoInfinitePayIdentificado:Number(totalAgoInfinite.toFixed(2)),
+      atualizadoEm:new Date().toISOString()
+    };
+    resumoMigracaoHistV376=resumo;
+    try{await setDoc(doc(db,'config','migracao_despesas_historicas_v376'),resumo);}catch(e){console.warn(e);}
+    console.info('[Despesas V37.6] Migração histórica concluída:',resumo);
+    return resumo;
+  })().finally(()=>{migracaoHistDespPromiseV376=null;});
+  return migracaoHistDespPromiseV376;
+}
+window.executarMigracaoDespesasHistoricasV376=executarMigracaoDespesasHistoricasV376;
+
+window.abrirConfirmacaoHistoricaV376=async function(ref,descricao,valor,competencia){
+  await carregarMovCaixa();
+  const h=confirmacaoHistoricaDespV376(ref);if(!h)return;
+  document.getElementById('modal-histdesp-v376')?.remove();
+  const html=`<div class="overlay open" id="modal-histdesp-v376" style="z-index:880"><div class="modal" style="max-width:520px">
+    <div class="modal-header"><div><div class="modal-title">Confirmação histórica</div><div style="font-size:12px;color:var(--texto-muted)">Competência ${esc(competencia)} · sem efeito no Caixa escritural</div></div><button class="modal-close" onclick="document.getElementById('modal-histdesp-v376').remove()">✕</button></div>
+    <div class="modal-body">
+      <div style="padding:10px 12px;background:#f9fafb;border:1px solid var(--borda);border-radius:8px;margin-bottom:13px"><strong>${esc(descricao)}</strong><div style="font-size:12px;color:var(--texto-muted)">${fmtValor(valor)}</div></div>
+      <div class="form-grid" style="grid-template-columns:1fr 1fr">
+        <div class="form-group"><label class="form-label">Data histórica do pagamento</label><input class="form-input" type="date" id="hd-data-v376" value="${esc(h.dataPagamentoHistorica||'')}"></div>
+        <div class="form-group"><label class="form-label">Conta histórica</label><input class="form-input" id="hd-conta-v376" value="${esc(h.contaHistorica||'')}" placeholder="Ex.: InfinitePay"></div>
+        <div class="form-group full"><label class="form-label">Observação / origem</label><input class="form-input" id="hd-obs-v376" value="${esc(h.origemFinanceiraHistorica||'')}"></div>
+      </div>
+      <div style="margin-top:12px;background:#fffbeb;border:1px solid #fde68a;color:#92400e;border-radius:8px;padding:10px 12px;font-size:12px"><strong>Histórico:</strong> editar estes dados não cria saída de Caixa. O saldo de abertura em 31/08/2026 já é a posição consolidada.</div>
+    </div>
+    <div class="modal-footer"><button class="btn btn-ghost" onclick="document.getElementById('modal-histdesp-v376').remove()">Cancelar</button><button class="btn btn-primary" onclick='salvarConfirmacaoHistoricaV376(${JSON.stringify(ref)})'>Salvar histórico</button></div>
+  </div></div>`;
+  document.body.insertAdjacentHTML('beforeend',html);
+};
+window.salvarConfirmacaoHistoricaV376=async function(ref){
+  const h=confirmacaoHistoricaDespV376(ref);if(!h)return;
+  const novo={...h,
+    dataPagamentoHistorica:document.getElementById('hd-data-v376')?.value||'',
+    contaHistorica:document.getElementById('hd-conta-v376')?.value.trim()||'',
+    origemFinanceiraHistorica:document.getElementById('hd-obs-v376')?.value.trim()||'',
+    impactoCaixa:false,atualizadoEm:new Date().toISOString()
+  };
+  await salvarMovCaixa(novo);
+  document.getElementById('modal-histdesp-v376')?.remove();
+  toast('Confirmação histórica atualizada ✓');
+  renderDespesasView();
+};
+
+async function inserirConciliacaoV376(){
+  const cont=document.getElementById('content');if(!cont)return;
+  document.getElementById('conciliacao-v32')?.remove();
+  document.getElementById('conciliacao-v376')?.remove();
+  await executarMigracaoDespesasHistoricasV376().catch(e=>console.warn(e));
+  await carregarMovCaixa();
+  const itens=await itensDespV32(despMes,despAno);
+  const historico=(despAno<2026)||(despAno===2026&&despMes<=7);
+  let confirmado=0,totalConf=0;
+  const rows=itens.map(i=>{
+    const st=statusConfirmacaoDespV376(i.ref);
+    if(st.tipo!=='pendente'){confirmado++;totalConf+=Number(i.valor||0);}
+    let caixa='',acao='';
+    if(st.tipo==='real'){
+      const m=st.mov;
+      caixa=`<span class="badge badge-pago">Pago</span><div style="font-size:11px;color:var(--texto-muted);margin-top:3px">${fmtData(m.data)} · ${fmtValor(m.valor)}${m.contaCaixa||m.conta?` · ${esc(contaTesV37(m.contaCaixa||m.conta)?.instituicao||m.contaCaixa||m.conta)}`:''}</div>`;
+      acao=`<button class="btn btn-ghost btn-sm" onclick='abrirBaixaDespesaV32(${JSON.stringify(i.ref)},${JSON.stringify(i.descricao)},${i.valor},${JSON.stringify(i.competencia)},${JSON.stringify(i.cat)})'>✏️ Editar baixa</button>`;
+    }else if(st.tipo==='historico'){
+      const h=st.mov;
+      caixa=`<span class="badge" style="background:#eff6ff;color:#1d4ed8">Confirmada — histórico</span><div style="font-size:11px;color:var(--texto-muted);margin-top:3px">${h.dataPagamentoHistorica?fmtData(h.dataPagamentoHistorica):'data não documentada'}${h.contaHistorica?` · ${esc(h.contaHistorica)}`:''}<br><span style="color:#9ca3af">não impacta o Caixa novo</span></div>`;
+      acao=`<button class="btn btn-ghost btn-sm" onclick='abrirConfirmacaoHistoricaV376(${JSON.stringify(i.ref)},${JSON.stringify(i.descricao)},${i.valor},${JSON.stringify(i.competencia)})'>🔎 Histórico</button>`;
+    }else{
+      caixa=`<span class="badge badge-pendente">Pendente</span>`;
+      acao=historico
+        ?`<button class="btn btn-ghost btn-sm" onclick="executarMigracaoDespesasHistoricasV376(true).then(()=>renderDespesasView())">Confirmar histórico</button>`
+        :`<button class="btn btn-success btn-sm" onclick='abrirBaixaDespesaV32(${JSON.stringify(i.ref)},${JSON.stringify(i.descricao)},${i.valor},${JSON.stringify(i.competencia)},${JSON.stringify(i.cat)})'>💵 Registrar pagamento</button>`;
+    }
+    return `<tr><td><strong>${esc(i.descricao)}</strong><div style="font-size:11px;color:var(--texto-muted)">${esc(catLabelV32(i.cat))}</div></td><td style="font-weight:700">${fmtValor(i.valor)}</td><td>${caixa}</td><td style="text-align:right">${acao}</td></tr>`;
+  }).join('');
+  const comp=itens.reduce((s,i)=>s+Number(i.valor||0),0);
+  const titulo=historico?'Confirmação Histórica das Despesas':'Conciliação de Caixa das Despesas';
+  const sub=historico
+    ?`Competências até agosto/2026 são validadas para histórico, mas não geram movimentação no Caixa iniciado em 31/08.`
+    :`A despesa entra na DRE pela competência e no Caixa somente quando o pagamento real é confirmado.`;
+  const agostoNota=(despAno===2026&&despMes===7)
+    ?`<div style="margin:12px 16px 0;background:#f0fdf4;border:1px solid #bbf7d0;color:#166534;border-radius:8px;padding:9px 11px;font-size:11.5px"><strong>Agosto confiável:</strong> a confirmação histórica preserva os R$ 6.859,20 da DRE sem recriar saídas no Caixa. As saídas InfinitePay identificadas no consolidado foram apenas documentadas como histórico.</div>`:'';
+  cont.insertAdjacentHTML('beforeend',`<div class="section-box" id="conciliacao-v376" style="margin-top:20px">
+    <div class="section-header"><div><div class="section-title">${titulo}</div><div style="font-size:12px;color:var(--texto-muted)">${sub}</div></div><div style="font-size:12px;text-align:right"><strong>${confirmado}/${itens.length}</strong> confirmadas<br><span style="color:var(--texto-muted)">${fmtValor(totalConf)} de ${fmtValor(comp)}</span></div></div>
+    ${agostoNota}
+    <div class="table-wrap"><table><thead><tr><th>Despesa</th><th>Competência</th><th>Confirmação</th><th></th></tr></thead><tbody>${rows||'<tr><td colspan="4"><div class="empty">Nenhuma despesa com valor neste mês.</div></td></tr>'}</tbody></table></div>
+  </div>`);
+}
+
+const renderDespesasBaseV376=renderDespesasView;
+renderDespesasView=async function(){
+  await renderDespesasBaseV376();
+  await inserirConciliacaoV376();
+};
+window.renderDespesasView=renderDespesasView;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FINANCEIRO: filtro NF permanente e status histórico das despesas
+// ─────────────────────────────────────────────────────────────────────────────
+const renderFinanceiroBaseV376=renderFinanceiroView;
+renderFinanceiroView=async function(){
+  await carregarNotasFiscaisV24();
+  await renderFinanceiroBaseV376();
+  aplicarNFFinanceiroV376();
+};
+window.renderFinanceiroView=renderFinanceiroView;
+
+// Inicialização: migração em segundo plano, sem alterar saldo físico.
+const initBaseV376=init;
+init=async function(){
+  await initBaseV376();
+  setTimeout(()=>executarMigracaoDespesasHistoricasV376().catch(e=>console.warn('[V37.6] Migração histórica:',e)),1000);
+};
+
+// Identificação visual.
+const setViewBaseV376=setView;
+setView=function(v){
+  setViewBaseV376(v);
+  if(v==='caixa'||v==='financeiro'){
+    const top=document.getElementById('topbar-right');
+    if(top)top.innerHTML=`<span style="font-size:11px;color:var(--texto-muted);font-weight:700;letter-spacing:.6px">${v==='caixa'?'TESOURARIA':'FINANCEIRO'} · V37.6</span>`;
+  }
+};
+window.setView=setView;
+
+window.diagnosticoV376=function(){
+  return {
+    versao:VERSAO_FINANCEIRO_V376,
+    nfFiltro:nfFiltroV376,
+    nfErroLeitura:nfErroLeituraV376,
+    despesasHistoricas:resumoMigracaoHistV376,
+    regraCorteCaixa:'Confirmações históricas <= 31/08/2026 têm impactaCaixa=false'
+  };
+};
