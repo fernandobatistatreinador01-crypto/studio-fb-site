@@ -115,3 +115,18 @@ A data de corte do Caixa escritural continua sendo 31/08/2026.
 - setembro/2026 em diante exige baixa real com data e conta.
 
 Portanto, a migração histórica não altera o saldo de abertura já informado para InfinitePay, Banco de Tesouraria ou Espécie.
+
+
+## V37.7 — regra histórica correta das despesas realizadas
+
+A V37.6 foi corrigida porque pressupunha confirmações históricas que não existiam.
+
+Regra definitiva:
+
+- **Setembro/2026 em diante:** despesa realizada somente após confirmação manual.
+- **Agosto/2026:** despesa realizada igual à DRE confiável do mês.
+- **Julho/2026 para trás:** toda despesa cadastrada no mês é considerada realizada.
+
+Esses valores alimentam o relatório de **Caixa realizado**, mas não criam lançamentos físicos retroativos nas contas bancárias. Os saldos de abertura de 31/08/2026 permanecem inalterados.
+
+Agosto possui auditoria visual contra o consolidado esperado de **R$ 6.859,20**.

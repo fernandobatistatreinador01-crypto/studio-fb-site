@@ -12379,3 +12379,262 @@ window.diagnosticoV376=function(){
     regraCorteCaixa:'Confirmações históricas <= 31/08/2026 têm impactaCaixa=false'
   };
 };
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// V37.7 — REGRA CORRETA DE DESPESA REALIZADA HISTÓRICA
+//
+// FONTE DE VERDADE:
+//   SET/2026 em diante -> confirmação manual / baixa operacional.
+//   AGO/2026           -> DRE confiável do mês.
+//   JUL/2026 para trás -> despesas cadastradas no próprio mês.
+//
+// Não são criadas baixas bancárias retroativas. O histórico alimenta os
+// relatórios de "Caixa realizado", mas NÃO entra na escrituração física da
+// Tesouraria iniciada com os saldos de abertura em 31/08/2026.
+// ═══════════════════════════════════════════════════════════════════════════════
+const VERSAO_DESPESAS_V377='37.7';
+const CORTE_MANUAL_DESP_V377='2026-09';
+const TOTAL_DRE_AGOSTO_REFERENCIA_V377=6859.20;
+
+const cacheDespHistV377=new Map();
+
+function chaveMesDespV377(mes,ano){
+  return `${ano}-${String(Number(mes)+1).padStart(2,'0')}`;
+}
+function ehMesHistoricoDespV377(mes,ano){
+  return Number(ano)<2026 || (Number(ano)===2026 && Number(mes)<=7);
+}
+function fonteHistoricaDespV377(mes,ano){
+  if(Number(ano)===2026 && Number(mes)===7){
+    return {
+      id:'dre_agosto',
+      label:'Confirmada — DRE',
+      detalhe:'Base: DRE confiável de agosto/2026',
+      conta:'Confirmada pela DRE'
+    };
+  }
+  return {
+    id:'cadastro_historico',
+    label:'Confirmada — cadastro',
+    detalhe:'Base: despesa cadastrada no mês',
+    conta:'Cadastro histórico'
+  };
+}
+
+async function carregarMesHistoricoDespV377(mes,ano){
+  if(!ehMesHistoricoDespV377(mes,ano))return [];
+  const key=chaveMesDespV377(mes,ano);
+  if(cacheDespHistV377.has(key))return cacheDespHistV377.get(key);
+
+  const cats=await loadDespesas(Number(mes),Number(ano));
+  const fonte=fonteHistoricaDespV377(mes,ano);
+  const itens=[];
+  Object.entries(cats||{}).forEach(([cat,lista])=>{
+    (lista||[]).forEach((d,idx)=>{
+      const valor=Number(d?.valor||0);
+      if(valor<=0)return;
+      itens.push({
+        id:`hist377_${key}_${cat}_${idx}`,
+        tipo:'despesa_realizada_historica_v377',
+        historico:true,
+        impactoCaixaFisico:false,
+        fonteHistorica:fonte.id,
+        data:'',
+        valor,
+        descricao:d?.desc||'Despesa',
+        cat,
+        conta:fonte.conta,
+        competencia:key,
+        status:'ativo'
+      });
+    });
+  });
+  cacheDespHistV377.set(key,itens);
+  return itens;
+}
+async function carregarAnoHistoricoDespV377(ano){
+  const jobs=[];
+  for(let m=0;m<12;m++){
+    if(ehMesHistoricoDespV377(m,ano))jobs.push(carregarMesHistoricoDespV377(m,ano));
+  }
+  await Promise.all(jobs);
+}
+function totalHistoricoCacheDespV377(mes,ano){
+  const arr=cacheDespHistV377.get(chaveMesDespV377(mes,ano))||[];
+  return arr.reduce((s,x)=>s+Number(x.valor||0),0);
+}
+
+// V37.6 tentava materializar "confirmações históricas" no Firebase.
+// A partir da V37.7 isso deixa de ser necessário: a confirmação histórica é
+// derivada da fonte correta e não de uma baixa que nunca existiu.
+executarMigracaoDespesasHistoricasV376=async function(){
+  return {
+    concluida:false,
+    substituidaPor:'V37.7',
+    motivo:'Histórico é derivado da DRE/cadastro, sem criar baixa retroativa.',
+    impactoCaixa:false
+  };
+};
+window.executarMigracaoDespesasHistoricasV376=executarMigracaoDespesasHistoricasV376;
+
+// Relatório de caixa: meses históricos usam a fonte derivada; setembro+ usa
+// exclusivamente as confirmações manuais existentes.
+const movDespesasMesBaseV377=movDespesasMesV32;
+movDespesasMesV32=function(mes,ano){
+  if(ehMesHistoricoDespV377(mes,ano)){
+    return cacheDespHistV377.get(chaveMesDespV377(mes,ano))||[];
+  }
+  return movDespesasMesBaseV377(mes,ano);
+};
+const totalDespesaCaixaBaseV377=totalDespesaCaixaV32;
+totalDespesaCaixaV32=function(mes,ano){
+  if(ehMesHistoricoDespV377(mes,ano)){
+    return totalHistoricoCacheDespV377(mes,ano);
+  }
+  return totalDespesaCaixaBaseV377(mes,ano);
+};
+
+// Pré-carrega o histórico antes do Financeiro calcular mês e visão anual.
+const renderFinanceiroBaseV377=renderFinanceiroView;
+renderFinanceiroView=async function(){
+  await carregarAnoHistoricoDespV377(finAno);
+  await renderFinanceiroBaseV377();
+
+  if(financeiroModo==='caixa'){
+    const content=document.getElementById('content');
+    if(content&&!document.getElementById('regra-historica-v377')){
+      const topo=content.firstElementChild;
+      const agosto=Number(totalHistoricoCacheDespV377(7,2026)||0);
+      const bateAgosto=Math.abs(agosto-TOTAL_DRE_AGOSTO_REFERENCIA_V377)<0.01;
+      const avisoAgo=finAno===2026
+        ?`<span style="margin-left:7px;color:${bateAgosto?'#166534':'#b91c1c'}"><strong>Agosto:</strong> ${fmtValor(agosto)} ${bateAgosto?'✓':'⚠ esperado '+fmtValor(TOTAL_DRE_AGOSTO_REFERENCIA_V377)}</span>`
+        :'';
+      const regra=document.createElement('div');
+      regra.id='regra-historica-v377';
+      regra.style.cssText='background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:11px 14px;font-size:12px;color:#78350f;margin-bottom:18px';
+      regra.innerHTML=`<strong>Regra de despesas realizadas:</strong> até jul/2026 = despesas cadastradas · ago/2026 = DRE confiável · set/2026 em diante = confirmação manual. O histórico não altera os saldos físicos de abertura.${avisoAgo}`;
+      if(topo)topo.insertAdjacentElement('afterend',regra);
+      else content.prepend(regra);
+    }
+  }
+};
+window.renderFinanceiroView=renderFinanceiroView;
+
+// Impressão também recebe o cache correto antes de calcular "Caixa realizado".
+if(typeof imprimirDREV35==='function'){
+  const imprimirDREBaseV377=imprimirDREV35;
+  imprimirDREV35=async function(){
+    await carregarAnoHistoricoDespV377(finAno);
+    return imprimirDREBaseV377();
+  };
+  window.imprimirDREV35=imprimirDREV35;
+}
+
+// Tela Despesas: não pede confirmação inexistente para o passado.
+// O passado já nasce "confirmado" pela sua fonte de verdade.
+async function inserirConciliacaoDespV377(){
+  const cont=document.getElementById('content');if(!cont)return;
+  document.getElementById('conciliacao-v32')?.remove();
+  document.getElementById('conciliacao-v376')?.remove();
+  document.getElementById('conciliacao-v377')?.remove();
+
+  await carregarMovCaixa();
+  const itens=await itensDespV32(despMes,despAno);
+  const historico=ehMesHistoricoDespV377(despMes,despAno);
+  const fonte=fonteHistoricaDespV377(despMes,despAno);
+
+  let qtd=0,totalConfirmado=0;
+  const rows=itens.map(i=>{
+    if(historico){
+      qtd++;totalConfirmado+=Number(i.valor||0);
+      const badge=fonte.id==='dre_agosto'
+        ?'<span class="badge" style="background:#f0fdf4;color:#166534">✓ Confirmada — DRE</span>'
+        :'<span class="badge" style="background:#eff6ff;color:#1d4ed8">✓ Confirmada — cadastro</span>';
+      return `<tr>
+        <td><strong>${esc(i.descricao)}</strong><div style="font-size:11px;color:var(--texto-muted)">${esc(catLabelV32(i.cat))}</div></td>
+        <td style="font-weight:700">${fmtValor(i.valor)}</td>
+        <td>${badge}<div style="font-size:11px;color:var(--texto-muted);margin-top:3px">${esc(fonte.detalhe)}<br><span style="color:#9ca3af">sem baixa bancária retroativa</span></div></td>
+        <td style="text-align:right"><span style="font-size:11px;color:#9ca3af">automático</span></td>
+      </tr>`;
+    }
+
+    const m=movDespV32(i.ref);
+    if(m){qtd++;totalConfirmado+=Number(m.valor||0);}
+    return `<tr>
+      <td><strong>${esc(i.descricao)}</strong><div style="font-size:11px;color:var(--texto-muted)">${esc(catLabelV32(i.cat))}</div></td>
+      <td style="font-weight:700">${fmtValor(i.valor)}</td>
+      <td>${m
+        ?`<span class="badge badge-pago">Pago</span><div style="font-size:11px;color:var(--texto-muted);margin-top:3px">${fmtData(m.data)} · ${fmtValor(m.valor)}${m.contaCaixa||m.conta?` · ${esc(contaTesV37(m.contaCaixa||m.conta)?.instituicao||m.contaCaixa||m.conta)}`:''}</div>`
+        :'<span class="badge badge-pendente">Pendente de confirmação</span>'}</td>
+      <td style="text-align:right"><button class="btn ${m?'btn-ghost':'btn-success'} btn-sm" onclick='abrirBaixaDespesaV32(${JSON.stringify(i.ref)},${JSON.stringify(i.descricao)},${i.valor},${JSON.stringify(i.competencia)},${JSON.stringify(i.cat)})'>${m?'✏️ Editar baixa':'💵 Confirmar pagamento'}</button></td>
+    </tr>`;
+  }).join('');
+
+  const totalCompetencia=itens.reduce((s,i)=>s+Number(i.valor||0),0);
+  let titulo='Confirmação Manual das Despesas';
+  let sub='A partir de setembro/2026, somente despesas confirmadas com data e conta entram no Caixa realizado.';
+  let nota='';
+  if(historico){
+    if(despAno===2026&&despMes===7){
+      titulo='Agosto — Confirmado pela DRE';
+      const bate=Math.abs(totalCompetencia-TOTAL_DRE_AGOSTO_REFERENCIA_V377)<0.01;
+      sub='Agosto é o marco histórico confiável. As despesas da DRE são consideradas realizadas sem recriar saídas bancárias.';
+      nota=`<div style="margin:12px 16px 0;background:${bate?'#f0fdf4':'#fef2f2'};border:1px solid ${bate?'#bbf7d0':'#fecaca'};color:${bate?'#166534':'#991b1b'};border-radius:8px;padding:9px 11px;font-size:11.5px"><strong>Auditoria de agosto:</strong> despesas cadastradas/DRE = ${fmtValor(totalCompetencia)}. ${bate?'Bate exatamente com o consolidado de R$ 6.859,20 ✓':'Não bate com o consolidado esperado de R$ 6.859,20.'}</div>`;
+    }else{
+      titulo='Histórico — Confirmado pelo Cadastro';
+      sub='Até julho/2026 não havia escrituração de baixas. Toda despesa cadastrada no mês é considerada realizada.';
+    }
+  }
+
+  cont.insertAdjacentHTML('beforeend',`<div class="section-box" id="conciliacao-v377" style="margin-top:20px">
+    <div class="section-header">
+      <div><div class="section-title">${titulo}</div><div style="font-size:12px;color:var(--texto-muted)">${sub}</div></div>
+      <div style="font-size:12px;text-align:right"><strong>${qtd}/${itens.length}</strong> confirmadas<br><span style="color:var(--texto-muted)">${fmtValor(totalConfirmado)} de ${fmtValor(totalCompetencia)}</span></div>
+    </div>
+    ${nota}
+    <div class="table-wrap"><table><thead><tr><th>Despesa</th><th>Valor</th><th>Confirmação</th><th></th></tr></thead><tbody>${rows||'<tr><td colspan="4"><div class="empty">Nenhuma despesa com valor neste mês.</div></td></tr>'}</tbody></table></div>
+  </div>`);
+}
+
+const renderDespesasBaseV377=renderDespesasView;
+renderDespesasView=async function(){
+  await renderDespesasBaseV377();
+  await inserirConciliacaoDespV377();
+};
+window.renderDespesasView=renderDespesasView;
+
+// Auditoria explícita para conferência no console, se necessário.
+window.auditarDespesasRealizadasV377=async function(ano=2026){
+  await carregarAnoHistoricoDespV377(Number(ano));
+  const meses=[];
+  for(let m=0;m<12;m++){
+    const tipo=ehMesHistoricoDespV377(m,ano)
+      ?(Number(ano)===2026&&m===7?'DRE':'CADASTRO')
+      :'MANUAL';
+    const valor=ehMesHistoricoDespV377(m,ano)
+      ?totalHistoricoCacheDespV377(m,ano)
+      :totalDespesaCaixaBaseV377(m,ano);
+    meses.push({mes:MESES_ABREV[m],tipo,valor:Number(Number(valor||0).toFixed(2))});
+  }
+  return {
+    versao:VERSAO_DESPESAS_V377,
+    regra:{
+      ateJulho:'despesas cadastradas',
+      agosto:'DRE confiável',
+      setembroEmDiante:'confirmação manual'
+    },
+    agostoEsperado:TOTAL_DRE_AGOSTO_REFERENCIA_V377,
+    meses
+  };
+};
+
+// Identificação visual.
+const setViewBaseV377=setView;
+setView=function(v){
+  setViewBaseV377(v);
+  if(v==='caixa'||v==='financeiro'||v==='despesas'){
+    const top=document.getElementById('topbar-right');
+    if(top)top.innerHTML=`<span style="font-size:11px;color:var(--texto-muted);font-weight:700;letter-spacing:.6px">${v==='caixa'?'TESOURARIA':v==='financeiro'?'FINANCEIRO':'DESPESAS'} · V37.7</span>`;
+  }
+};
+window.setView=setView;

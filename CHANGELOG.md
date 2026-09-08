@@ -58,3 +58,14 @@
 - Agosto recebe conciliação histórica baseada no consolidado validado.
 - Confirmações históricas não movimentam o Caixa nem alteram os saldos de abertura.
 - Setembro em diante mantém confirmação operacional real.
+
+
+## V37.7
+- Corrigida a premissa histórica da confirmação de despesas.
+- Setembro/2026+ continua por confirmação manual.
+- Agosto/2026 é considerado realizado pela DRE confiável.
+- Julho/2026 e meses anteriores são considerados realizados pelas despesas cadastradas.
+- Relatório Caixa Realizado anual passa a exibir os valores históricos corretos.
+- Histórico continua sem alterar os saldos físicos de abertura da Tesouraria.
+- Tela Despesas mostra claramente a fonte da confirmação de cada período.
+- Auditoria automática de agosto contra R$ 6.859,20.
