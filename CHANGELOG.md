@@ -1,5 +1,12 @@
 # Changelog
 
+## V37.8 — integridade matemática do Financeiro
+- Corrigido o PDF **Resumo de Caixa Realizado**: as linhas de despesas agora usam a mesma fonte do total (baixas efetivamente confirmadas).
+- A DRE permanece por competência e continua listando as despesas cadastradas do mês.
+- O sistema bloqueia a impressão se a soma das linhas divergir do total calculado em mais de R$ 0,01.
+- Adicionado diagnóstico `auditarRelatorioFinanceiroV378()` para conferir soma das linhas, total e diferença.
+- Identificação visual do Financeiro/Tesouraria/Despesas atualizada para V37.8.
+
 ## V37
 
 - Nova Tesouraria escritural / Caixa 2.0.

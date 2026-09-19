@@ -11278,10 +11278,43 @@ window.renderCaixaView=renderCaixaView;
 // ─────────────────────────────────────────────────────────────────────────────
 function estiloImpressaoStudioV37(){return `<style>@page{size:A4;margin:13mm}*{box-sizing:border-box}body{font-family:Arial,Helvetica,sans-serif;color:#161616;margin:0;font-size:11px;line-height:1.4}.brand{border-top:7px solid #c62828;padding:18px 0 14px;border-bottom:1px solid #ddd;display:flex;justify-content:space-between;align-items:flex-end}.brand h1{font-size:25px;letter-spacing:.5px;margin:0}.brand .sub{color:#777;font-size:10px;text-transform:uppercase;letter-spacing:1px}.periodo{font-size:14px;font-weight:700}.kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin:17px 0}.kpi{border:1px solid #ddd;border-radius:8px;padding:11px}.kpi small{display:block;color:#777;text-transform:uppercase;font-size:8.5px;letter-spacing:.7px}.kpi strong{display:block;font-size:19px;margin-top:4px}.sec{margin-top:18px}.sec-title{background:#181818;color:#fff;padding:7px 9px;font-size:11px;text-transform:uppercase;letter-spacing:.8px;border-left:5px solid #c62828}table{width:100%;border-collapse:collapse}th{font-size:8.5px;color:#666;text-transform:uppercase;letter-spacing:.4px;text-align:left;background:#f5f5f5}th,td{padding:6px 7px;border-bottom:1px solid #e8e8e8;vertical-align:top}.num{text-align:right;font-weight:700;white-space:nowrap}.muted{font-size:8.8px;color:#777;margin-top:2px}.total td{font-weight:700;border-top:2px solid #222}.foot{margin-top:20px;border-top:1px solid #ddd;padding-top:8px;color:#777;font-size:8.5px;display:flex;justify-content:space-between}.no-print{margin-bottom:12px;background:#c62828;color:#fff;border:0;border-radius:5px;padding:8px 14px;font-weight:700}@media print{.no-print{display:none}.sec{break-inside:avoid}.page-break{break-before:page}}</style>`;}
 window.imprimirDREV35=async function(){
-  await carregarReceitasAvulsasV35();const cats=await loadDespesas(finMes,finAno),modo=financeiroModo,linhas=modo==='competencia'?linhasReceitaCompetenciaV35(finMes,finAno):linhasReceitaCaixaV35(finMes,finAno),rec=linhas.reduce((s,l)=>s+Number(l.valor||0),0),desp=modo==='competencia'?totalDesp(cats):totalDespesaCaixaV32(finMes,finAno),res=rec-desp;
-  const lr=linhas.map(l=>`<tr><td><strong>${esc(l.alunoNome||'—')}</strong><div class="muted">${esc(l.descricao||'')} · ${esc(l.detalhe||'')}</div><div class="muted">Origem: ${esc(l.tipo)} / ${esc(l.origemId)}</div></td><td class="num">${moedaAssinadaV37(l.valor)}</td></tr>`).join('');let ld='';Object.entries(cats||{}).forEach(([cat,lista])=>(lista||[]).filter(d=>Number(d.valor)>0).forEach(d=>ld+=`<tr><td><strong>${esc(d.desc)}</strong><div class="muted">${esc(catLabelV32(cat))}</div></td><td class="num">${fmtValor(d.valor)}</td></tr>`));
+  await carregarReceitasAvulsasV35();
+  const cats=await loadDespesas(finMes,finAno),modo=financeiroModo;
+  const linhas=modo==='competencia'?linhasReceitaCompetenciaV35(finMes,finAno):linhasReceitaCaixaV35(finMes,finAno);
+  const rec=arredV32(linhas.reduce((s,l)=>s+Number(l.valor||0),0));
+
+  // V37.8 — a tabela e o total de despesas usam EXATAMENTE a mesma fonte.
+  // Competência: cadastro/DRE. Caixa: baixas efetivamente realizadas.
+  let despesasLinhas=[];
+  if(modo==='competencia'){
+    Object.entries(cats||{}).forEach(([cat,lista])=>(lista||[]).filter(d=>Number(d.valor)>0).forEach(d=>despesasLinhas.push({
+      descricao:d.desc||'Despesa',
+      detalhe:catLabelV32(cat),
+      valor:Number(d.valor||0)
+    })));
+  }else{
+    despesasLinhas=movDespesasMesV32(finMes,finAno).map(m=>({
+      descricao:m.descricao||'Despesa',
+      detalhe:[m.data?fmtData(m.data):'Histórico',m.competencia?`competência ${m.competencia}`:'',m.contaCaixa||m.conta||''].filter(Boolean).join(' · '),
+      valor:Number(m.valor||0)
+    }));
+  }
+
+  const despLinhas=arredV32(despesasLinhas.reduce((s,d)=>s+Number(d.valor||0),0));
+  const despFonte=arredV32(modo==='competencia'?totalDesp(cats):totalDespesaCaixaV32(finMes,finAno));
+  const diferencaIntegridade=arredV32(despLinhas-despFonte);
+  if(Math.abs(diferencaIntegridade)>0.009){
+    console.error('[Financeiro V37.8] ERRO DE INTEGRIDADE NO RELATÓRIO',{modo,mes:finMes,ano:finAno,despLinhas,despFonte,diferenca:diferencaIntegridade,despesasLinhas});
+    return mensagemSistemaV34(`O relatório não foi emitido porque a soma das linhas (${fmtValor(despLinhas)}) difere do total calculado (${fmtValor(despFonte)}). Diferença: ${moedaAssinadaV37(diferencaIntegridade)}. Revise as confirmações de despesas antes de imprimir.`,'Falha de integridade financeira','alerta');
+  }
+
+  const desp=despLinhas,res=arredV32(rec-desp);
+  const lr=linhas.map(l=>`<tr><td><strong>${esc(l.alunoNome||'—')}</strong><div class="muted">${esc(l.descricao||'')} · ${esc(l.detalhe||'')}</div><div class="muted">Origem: ${esc(l.tipo)} / ${esc(l.origemId)}</div></td><td class="num">${moedaAssinadaV37(l.valor)}</td></tr>`).join('');
+  const ld=despesasLinhas.map(d=>`<tr><td><strong>${esc(d.descricao)}</strong><div class="muted">${esc(d.detalhe||'')}</div></td><td class="num">${fmtValor(d.valor)}</td></tr>`).join('');
   const titulo=modo==='competencia'?'DRE — Regime de Competência':'Resumo de Caixa Realizado',marco=finMes===7&&finAno===2026?' · Marco confiável':'';
-  const html=`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Studio FB — ${titulo}</title>${estiloImpressaoStudioV37()}</head><body><button class="no-print" onclick="window.print()">Imprimir / Salvar PDF</button><div class="brand"><div><div class="sub">STUDIO FB · GESTÃO FINANCEIRA</div><h1>${titulo}</h1></div><div class="periodo">${MESES_NOMES[finMes]} ${finAno}${marco}</div></div><div class="kpis"><div class="kpi"><small>Receita</small><strong>${fmtValor(rec)}</strong></div><div class="kpi"><small>Despesas</small><strong>${fmtValor(desp)}</strong></div><div class="kpi"><small>Resultado</small><strong style="color:${res>=0?'#1b7f45':'#c62828'}">${moedaAssinadaV37(res)}</strong></div></div><div class="sec"><div class="sec-title">Receitas com origem rastreável</div><table><thead><tr><th>Origem / competência</th><th class="num">Valor</th></tr></thead><tbody>${lr||'<tr><td>Nenhuma receita.</td><td class="num">R$ 0,00</td></tr>'}<tr class="total"><td>Total de receitas</td><td class="num">${fmtValor(rec)}</td></tr></tbody></table></div><div class="sec"><div class="sec-title">Despesas</div><table><thead><tr><th>Despesa / categoria</th><th class="num">Valor</th></tr></thead><tbody>${ld||'<tr><td>Nenhuma despesa.</td><td class="num">R$ 0,00</td></tr>'}<tr class="total"><td>Total de despesas</td><td class="num">${fmtValor(desp)}</td></tr></tbody></table></div><div class="foot"><span>Studio FB · Documento gerencial gerado pelo sistema</span><span>${new Date().toLocaleString('pt-BR')}</span></div></body></html>`;
+  const tituloDesp=modo==='competencia'?'Despesas por competência':'Despesas efetivamente pagas';
+  const cabecalhoDesp=modo==='competencia'?'Despesa / categoria':'Pagamento / origem';
+  const html=`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Studio FB — ${titulo}</title>${estiloImpressaoStudioV37()}</head><body><button class="no-print" onclick="window.print()">Imprimir / Salvar PDF</button><div class="brand"><div><div class="sub">STUDIO FB · GESTÃO FINANCEIRA</div><h1>${titulo}</h1></div><div class="periodo">${MESES_NOMES[finMes]} ${finAno}${marco}</div></div><div class="kpis"><div class="kpi"><small>Receita</small><strong>${fmtValor(rec)}</strong></div><div class="kpi"><small>Despesas</small><strong>${fmtValor(desp)}</strong></div><div class="kpi"><small>Resultado</small><strong style="color:${res>=0?'#1b7f45':'#c62828'}">${moedaAssinadaV37(res)}</strong></div></div><div class="sec"><div class="sec-title">Receitas com origem rastreável</div><table><thead><tr><th>Origem / competência</th><th class="num">Valor</th></tr></thead><tbody>${lr||'<tr><td>Nenhuma receita.</td><td class="num">R$ 0,00</td></tr>'}<tr class="total"><td>Total de receitas</td><td class="num">${fmtValor(rec)}</td></tr></tbody></table></div><div class="sec"><div class="sec-title">${tituloDesp}</div><table><thead><tr><th>${cabecalhoDesp}</th><th class="num">Valor</th></tr></thead><tbody>${ld||'<tr><td>Nenhuma despesa.</td><td class="num">R$ 0,00</td></tr>'}<tr class="total"><td>Total de despesas</td><td class="num">${fmtValor(desp)}</td></tr></tbody></table></div><div class="foot"><span>Studio FB · Documento gerencial gerado pelo sistema · V37.8</span><span>${new Date().toLocaleString('pt-BR')}</span></div></body></html>`;
   const w=window.open('','_blank');if(!w)return mensagemSistemaV34('Libere pop-ups para imprimir.','Impressão bloqueada','alerta');w.document.write(html);w.document.close();
 };
 imprimirDRE=window.imprimirDREV35;
@@ -12638,3 +12671,50 @@ setView=function(v){
   }
 };
 window.setView=setView;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// V37.8 — INTEGRIDADE MATEMÁTICA DO RELATÓRIO FINANCEIRO
+// - Caixa Realizado exibe somente as baixas que formam o total de despesas;
+// - DRE continua exibindo despesas por competência;
+// - bloqueia impressão se a soma das linhas diferir do total calculado;
+// - diagnóstico explícito disponível no console para auditoria.
+// ═══════════════════════════════════════════════════════════════════════════════
+const VERSAO_FINANCEIRO_V378='37.8';
+
+window.auditarRelatorioFinanceiroV378=async function(mes=finMes,ano=finAno,modo=financeiroModo){
+  mes=Number(mes);ano=Number(ano);modo=modo==='caixa'?'caixa':'competencia';
+  await carregarMovCaixa();
+  if(typeof carregarAnoHistoricoDespV377==='function')await carregarAnoHistoricoDespV377(ano);
+  const cats=await loadDespesas(mes,ano);
+  let linhasDesp=[];
+  if(modo==='competencia'){
+    Object.entries(cats||{}).forEach(([cat,lista])=>(lista||[]).filter(d=>Number(d.valor)>0).forEach(d=>linhasDesp.push({descricao:d.desc||'Despesa',categoria:catLabelV32(cat),valor:Number(d.valor||0)})));
+  }else{
+    linhasDesp=movDespesasMesV32(mes,ano).map(m=>({descricao:m.descricao||'Despesa',data:m.data||'',competencia:m.competencia||'',valor:Number(m.valor||0),ref:m.despesaRef||m.id||''}));
+  }
+  const somaLinhas=arredV32(linhasDesp.reduce((s,x)=>s+Number(x.valor||0),0));
+  const totalCalculado=arredV32(modo==='competencia'?totalDesp(cats):totalDespesaCaixaV32(mes,ano));
+  return {
+    versao:VERSAO_FINANCEIRO_V378,
+    modo,mes,ano,
+    somaLinhas,totalCalculado,
+    diferenca:arredV32(somaLinhas-totalCalculado),
+    integridade:Math.abs(somaLinhas-totalCalculado)<0.01,
+    linhas:linhasDesp
+  };
+};
+
+const setViewBaseV378=setView;
+setView=function(v){
+  setViewBaseV378(v);
+  if(v==='caixa'||v==='financeiro'||v==='despesas'){
+    const top=document.getElementById('topbar-right');
+    if(top)top.innerHTML=`<span style="font-size:11px;color:var(--texto-muted);font-weight:700;letter-spacing:.6px">${v==='caixa'?'TESOURARIA':v==='financeiro'?'FINANCEIRO':'DESPESAS'} · V37.8</span>`;
+  }
+};
+window.setView=setView;
+
+// Mantém também o alias legado de impressão apontando para a versão auditada
+// (incluindo o pré-carregamento histórico da V37.7 quando aplicável).
+imprimirDRE=window.imprimirDREV35;
+window.imprimirDRE=window.imprimirDREV35;

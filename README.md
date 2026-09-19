@@ -2,7 +2,7 @@
 
 Aplicação web do Studio FB.
 
-## Versão de produção: V37
+## Versão de produção: V37.8
 
 A V37 consolida o Financeiro/DRE auditável e inaugura a Tesouraria escritural.
 
@@ -130,3 +130,15 @@ Regra definitiva:
 Esses valores alimentam o relatório de **Caixa realizado**, mas não criam lançamentos físicos retroativos nas contas bancárias. Os saldos de abertura de 31/08/2026 permanecem inalterados.
 
 Agosto possui auditoria visual contra o consolidado esperado de **R$ 6.859,20**.
+
+### V37.8 — integridade matemática do relatório
+
+No **Caixa Realizado**, a tabela de despesas e o total passam a ser derivados da mesma fonte: as baixas efetivamente confirmadas. Na **DRE**, as linhas continuam vindo das despesas por competência. A impressão é interrompida se houver qualquer divergência superior a R$ 0,01 entre a soma das linhas e o total calculado.
+
+Para auditoria manual no console:
+
+```js
+await auditarRelatorioFinanceiroV378(8, 2026, 'caixa')
+```
+
+O retorno inclui `somaLinhas`, `totalCalculado`, `diferenca`, `integridade` e as linhas usadas no cálculo.
