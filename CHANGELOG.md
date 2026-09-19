@@ -88,3 +88,10 @@
 - Histórico continua sem alterar os saldos físicos de abertura da Tesouraria.
 - Tela Despesas mostra claramente a fonte da confirmação de cada período.
 - Auditoria automática de agosto contra R$ 6.859,20.
+
+## V37.10 — 19/09/2026
+- Saneamento automático de baixas órfãs após correção/exclusão da escrituração.
+- Normalização de legado parcial + baixa integral duplicada.
+- Reparo auditável da baixa de Campainha + barrinhas de setembro/2026 com base no extrato conciliado.
+- Financeiro, Despesas, Tesouraria e impressão executam saneamento antes de renderizar.
+- Nenhum histórico é apagado: correções preservam trilha de auditoria.

@@ -11314,7 +11314,7 @@ window.imprimirDREV35=async function(){
   const titulo=modo==='competencia'?'DRE — Regime de Competência':'Resumo de Caixa Realizado',marco=finMes===7&&finAno===2026?' · Marco confiável':'';
   const tituloDesp=modo==='competencia'?'Despesas por competência':'Despesas efetivamente pagas';
   const cabecalhoDesp=modo==='competencia'?'Despesa / categoria':'Pagamento / origem';
-  const html=`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Studio FB — ${titulo}</title>${estiloImpressaoStudioV37()}</head><body><button class="no-print" onclick="window.print()">Imprimir / Salvar PDF</button><div class="brand"><div><div class="sub">STUDIO FB · GESTÃO FINANCEIRA</div><h1>${titulo}</h1></div><div class="periodo">${MESES_NOMES[finMes]} ${finAno}${marco}</div></div><div class="kpis"><div class="kpi"><small>Receita</small><strong>${fmtValor(rec)}</strong></div><div class="kpi"><small>Despesas</small><strong>${fmtValor(desp)}</strong></div><div class="kpi"><small>Resultado</small><strong style="color:${res>=0?'#1b7f45':'#c62828'}">${moedaAssinadaV37(res)}</strong></div></div><div class="sec"><div class="sec-title">Receitas com origem rastreável</div><table><thead><tr><th>Origem / competência</th><th class="num">Valor</th></tr></thead><tbody>${lr||'<tr><td>Nenhuma receita.</td><td class="num">R$ 0,00</td></tr>'}<tr class="total"><td>Total de receitas</td><td class="num">${fmtValor(rec)}</td></tr></tbody></table></div><div class="sec"><div class="sec-title">${tituloDesp}</div><table><thead><tr><th>${cabecalhoDesp}</th><th class="num">Valor</th></tr></thead><tbody>${ld||'<tr><td>Nenhuma despesa.</td><td class="num">R$ 0,00</td></tr>'}<tr class="total"><td>Total de despesas</td><td class="num">${fmtValor(desp)}</td></tr></tbody></table></div><div class="foot"><span>Studio FB · Documento gerencial gerado pelo sistema · V37.9</span><span>${new Date().toLocaleString('pt-BR')}</span></div></body></html>`;
+  const html=`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Studio FB — ${titulo}</title>${estiloImpressaoStudioV37()}</head><body><button class="no-print" onclick="window.print()">Imprimir / Salvar PDF</button><div class="brand"><div><div class="sub">STUDIO FB · GESTÃO FINANCEIRA</div><h1>${titulo}</h1></div><div class="periodo">${MESES_NOMES[finMes]} ${finAno}${marco}</div></div><div class="kpis"><div class="kpi"><small>Receita</small><strong>${fmtValor(rec)}</strong></div><div class="kpi"><small>Despesas</small><strong>${fmtValor(desp)}</strong></div><div class="kpi"><small>Resultado</small><strong style="color:${res>=0?'#1b7f45':'#c62828'}">${moedaAssinadaV37(res)}</strong></div></div><div class="sec"><div class="sec-title">Receitas com origem rastreável</div><table><thead><tr><th>Origem / competência</th><th class="num">Valor</th></tr></thead><tbody>${lr||'<tr><td>Nenhuma receita.</td><td class="num">R$ 0,00</td></tr>'}<tr class="total"><td>Total de receitas</td><td class="num">${fmtValor(rec)}</td></tr></tbody></table></div><div class="sec"><div class="sec-title">${tituloDesp}</div><table><thead><tr><th>${cabecalhoDesp}</th><th class="num">Valor</th></tr></thead><tbody>${ld||'<tr><td>Nenhuma despesa.</td><td class="num">R$ 0,00</td></tr>'}<tr class="total"><td>Total de despesas</td><td class="num">${fmtValor(desp)}</td></tr></tbody></table></div><div class="foot"><span>Studio FB · Documento gerencial gerado pelo sistema · V37.10</span><span>${new Date().toLocaleString('pt-BR')}</span></div></body></html>`;
   const w=window.open('','_blank');if(!w)return mensagemSistemaV34('Libere pop-ups para imprimir.','Impressão bloqueada','alerta');w.document.write(html);w.document.close();
 };
 imprimirDRE=window.imprimirDREV35;
@@ -13053,6 +13053,157 @@ setView=function(v){
   if(v==='caixa'||v==='financeiro'||v==='despesas'){
     const top=document.getElementById('topbar-right');
     if(top)top.innerHTML=`<span style="font-size:11px;color:var(--texto-muted);font-weight:700;letter-spacing:.6px">${v==='caixa'?'TESOURARIA':v==='financeiro'?'FINANCEIRO':'DESPESAS'} · V37.9</span>`;
+  }
+};
+window.setView=setView;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// V37.10 — SANEAMENTO AUTOMÁTICO DAS BAIXAS LEGADAS
+// Corrige o ponto que a V37.9 apenas sinalizava: movimentos antigos continuavam
+// ativos no Caixa mesmo após a escrituração ser corrigida.
+// Regras:
+// 1) setembro/2026+ usa a escrituração atual como fonte de existência da despesa;
+//    baixa sem despesa correspondente é arquivada (nunca apagada);
+// 2) legado com "parcial + baixa integral duplicada" é normalizado para o saldo;
+// 3) reparo auditável de setembro/2026 cria a baixa verificada de Campainha +
+//    barrinhas (R$ 233,99 em 13/09/2026) quando ela estiver ausente;
+// 4) todas as alterações ficam marcadas com motivo/origem V37.10.
+// ═══════════════════════════════════════════════════════════════════════════════
+const VERSAO_DESPESAS_V3710='37.10';
+
+function quaseIgualV3710(a,b){ return Math.abs(Number(a||0)-Number(b||0))<0.009; }
+function chaveDescricaoV3710(v){
+  return String(v||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/\s+/g,' ').trim();
+}
+function ehSetembro2026V3710(mes,ano){ return Number(mes)===8&&Number(ano)===2026; }
+
+async function arquivarMovV3710(m,motivo,extra={}){
+  if(!m||m.status==='excluido')return false;
+  await salvarMovCaixa({...m,...extra,status:'excluido',excluidoEm:new Date().toISOString(),motivoExclusao:motivo,atualizadoEm:new Date().toISOString(),saneadoV3710:true});
+  return true;
+}
+
+async function sanearBaixasComEscrituracaoV3710(mes,ano,{reparoSetembro=true}={}){
+  mes=Number(mes);ano=Number(ano);
+  if(typeof ehMesHistoricoDespV377==='function'&&ehMesHistoricoDespV377(mes,ano)){
+    return {versao:VERSAO_DESPESAS_V3710,mes,ano,historico:true,arquivadas:0,ajustadas:0,criadas:0};
+  }
+  await carregarMovCaixa(true);
+  await garantirIdsDespesasV379(mes,ano);
+  await migrarRefsLegadasDespesasV379(mes,ano);
+  const itens=await itensDespV32(mes,ano);
+  const refs=new Set(itens.map(i=>String(i.ref)));
+  const comp=competenciaV379(mes,ano);
+  let arquivadas=0,ajustadas=0,criadas=0;
+
+  // 1) Baixas órfãs: se a despesa não existe mais na escrituração, a baixa deixa
+  // de compor o Caixa realizado. O registro é preservado como excluído/auditável.
+  const ativosMes=(caixaMovs||[]).filter(m=>ativoPagamentoDespV379(m)&&String(m.competencia||'')===comp);
+  for(const m of ativosMes){
+    if(refs.has(String(m.despesaRef)))continue;
+    if(await arquivarMovV3710(m,'despesa_removida_da_escrituracao_v3710',{refOrfaoV3710:m.despesaRef||''}))arquivadas++;
+  }
+
+  // Recarrega o cache local já atualizado por salvarMovCaixa.
+  // 2) Corrige a assinatura legada: uma parcial anterior + uma baixa cujo valor
+  // é exatamente o valor INTEGRAL atual da despesa. Neste caso, a baixa integral
+  // antiga representava o "restante" na UI antiga e foi gravada como total.
+  for(const i of itens){
+    let ps=pagamentosDespesaV379(i.ref);
+    if(ps.length<2)continue;
+    const total=arredV32(ps.reduce((s,p)=>s+Number(p.valor||0),0));
+    const valor=arredV32(i.valor);
+    if(total-valor<=0.009)continue;
+
+    // Procura uma única baixa que coincida com o total escriturado, existindo
+    // outra(s) baixa(s) positiva(s). Ajusta somente quando o restante é válido.
+    const candidatos=ps.filter(p=>quaseIgualV3710(p.valor,valor));
+    if(candidatos.length===1){
+      const cand=candidatos[0];
+      const outros=arredV32(ps.filter(p=>String(p.id)!==String(cand.id)).reduce((s,p)=>s+Number(p.valor||0),0));
+      const restante=arredV32(valor-outros);
+      if(restante>0.009&&restante<valor-0.009){
+        await salvarMovCaixa({...cand,valor:restante,valorAntesSaneamentoV3710:Number(cand.valor||0),motivoAjusteV3710:'parcial_mais_total_legado',atualizadoEm:new Date().toISOString(),saneadoV3710:true});
+        ajustadas++;
+      }
+    }
+  }
+
+  // 3) Reparo pontual e verificável da conciliação de setembro/2026.
+  // Extrato auditado: Campainha + barrinhas = R$ 233,99 em 13/09/2026,
+  // InfinitePay. Só cria se a escrituração atual tiver exatamente esse item/valor
+  // e não houver nenhuma baixa ativa vinculada.
+  if(reparoSetembro&&ehSetembro2026V3710(mes,ano)){
+    const camp=itens.find(i=>chaveDescricaoV3710(i.descricao)==='campainha + barrinhas'&&quaseIgualV3710(i.valor,233.99));
+    if(camp&&pagamentosDespesaV379(camp.ref).length===0){
+      const id='cx_desp_reparo_campainha_202609_v3710';
+      const ja=(caixaMovs||[]).find(m=>String(m.id)===id&&m.status!=='excluido');
+      if(!ja){
+        await salvarMovCaixa({
+          id,tipo:'pagamento_despesa_operacional',despesaRef:camp.ref,data:'2026-09-13',valor:233.99,
+          competencia:camp.competencia||'2026-09',descricao:camp.descricao,cat:camp.cat||'despesa_op',
+          conta:'infinite_corrente',contaCaixa:'infinite_corrente',destinacaoGerencial:'',
+          observacao:'Baixa recomposta pela auditoria bancária de setembro/2026 (V37.10).',
+          status:'ativo',criadoEm:new Date().toISOString(),atualizadoEm:new Date().toISOString(),ts:Date.now(),
+          modeloBaixa:'multipla_v3710',origemReparo:'extrato_infinitepay_set2026',saneadoV3710:true
+        });
+        criadas++;
+      }
+    }
+  }
+
+  const totalEscriturado=arredV32(itens.reduce((s,i)=>s+Number(i.valor||0),0));
+  const totalBaixado=arredV32(movDespesasMesV32(mes,ano).reduce((s,m)=>s+Number(m.valor||0),0));
+  return {versao:VERSAO_DESPESAS_V3710,mes,ano,arquivadas,ajustadas,criadas,totalEscriturado,totalBaixado,diferenca:arredV32(totalBaixado-totalEscriturado)};
+}
+window.sanearBaixasComEscrituracaoV3710=sanearBaixasComEscrituracaoV3710;
+
+// Executa saneamento ANTES de exibir Financeiro/Caixa/Despesas. Assim registros
+// órfãos antigos deixam de reaparecer depois que a escrituração foi corrigida.
+const renderFinanceiroBaseV3710=renderFinanceiroView;
+renderFinanceiroView=async function(){
+  await sanearBaixasComEscrituracaoV3710(finMes,finAno);
+  return renderFinanceiroBaseV3710();
+};
+window.renderFinanceiroView=renderFinanceiroView;
+
+const renderDespesasBaseV3710=renderDespesasView;
+renderDespesasView=async function(){
+  await sanearBaixasComEscrituracaoV3710(despMes,despAno);
+  return renderDespesasBaseV3710();
+};
+window.renderDespesasView=renderDespesasView;
+
+const renderCaixaBaseV3710=renderCaixaView;
+renderCaixaView=async function(){
+  await sanearBaixasComEscrituracaoV3710(cxMes,cxAno);
+  return renderCaixaBaseV3710();
+};
+window.renderCaixaView=renderCaixaView;
+
+// Impressão usa o mesmo saneamento antes de montar as linhas.
+const imprimirDREBaseV3710=window.imprimirDREV35;
+window.imprimirDREV35=async function(){
+  await sanearBaixasComEscrituracaoV3710(finMes,finAno);
+  return imprimirDREBaseV3710();
+};
+imprimirDRE=window.imprimirDREV35;
+window.imprimirDRE=window.imprimirDREV35;
+
+// Auditoria simples no console e para futuras telas diagnósticas.
+window.auditarSaneamentoV3710=async function(mes=finMes,ano=finAno){
+  const saneamento=await sanearBaixasComEscrituracaoV3710(mes,ano);
+  const base=await window.auditarSincroniaDespesasV379(mes,ano);
+  return {...base,versao:VERSAO_DESPESAS_V3710,saneamento};
+};
+
+// Identidade visual da versão atual nas áreas financeiras.
+const setViewBaseV3710=setView;
+setView=function(v){
+  setViewBaseV3710(v);
+  if(v==='caixa'||v==='financeiro'||v==='despesas'){
+    const top=document.getElementById('topbar-right');
+    if(top)top.innerHTML=`<span style="font-size:11px;color:var(--texto-muted);font-weight:700;letter-spacing:.6px">${v==='caixa'?'TESOURARIA':v==='financeiro'?'FINANCEIRO':'DESPESAS'} · V37.10</span>`;
   }
 };
 window.setView=setView;
