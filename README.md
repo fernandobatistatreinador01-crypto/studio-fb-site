@@ -2,7 +2,7 @@
 
 Aplicação web do Studio FB.
 
-## Versão de produção: V37.8
+## Versão de produção: V37.9
 
 A V37 consolida o Financeiro/DRE auditável e inaugura a Tesouraria escritural.
 

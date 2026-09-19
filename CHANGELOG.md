@@ -1,5 +1,17 @@
 # Changelog
 
+## V37.9 — sincronização da escrituração com as baixas
+- Despesas pontuais passam a receber **ID permanente**, evitando que edição, inclusão ou exclusão mude a identidade da despesa.
+- Uma mesma despesa pode ter **múltiplos pagamentos parciais** (ex.: R$ 180 + R$ 200 = R$ 380).
+- O sistema bloqueia a soma das baixas quando ela ultrapassa o valor escriturado da despesa.
+- Editar o valor da despesa preserva as baixas existentes e recalcula o saldo pendente; não cria uma nova baixa integral.
+- Excluir uma despesa com baixas exige confirmação e arquiva as baixas vinculadas, evitando movimentos órfãos.
+- Referências antigas baseadas em índice são migradas com segurança por descrição, categoria e competência para o novo ID estável.
+- A tela de Despesas ganhou auditoria por item: **pago, parcial, excesso e sem baixa**, além de listar baixas órfãs.
+- Baixas órfãs podem ser canceladas diretamente no painel de conciliação.
+- Adicionado diagnóstico `auditarSincroniaDespesasV379(mes, ano)`.
+- PDF/Financeiro permanece com a trava matemática da V37.8 e passa a identificar a versão V37.9.
+
 ## V37.8 — integridade matemática do Financeiro
 - Corrigido o PDF **Resumo de Caixa Realizado**: as linhas de despesas agora usam a mesma fonte do total (baixas efetivamente confirmadas).
 - A DRE permanece por competência e continua listando as despesas cadastradas do mês.

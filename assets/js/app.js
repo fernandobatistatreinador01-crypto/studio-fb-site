@@ -11314,7 +11314,7 @@ window.imprimirDREV35=async function(){
   const titulo=modo==='competencia'?'DRE — Regime de Competência':'Resumo de Caixa Realizado',marco=finMes===7&&finAno===2026?' · Marco confiável':'';
   const tituloDesp=modo==='competencia'?'Despesas por competência':'Despesas efetivamente pagas';
   const cabecalhoDesp=modo==='competencia'?'Despesa / categoria':'Pagamento / origem';
-  const html=`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Studio FB — ${titulo}</title>${estiloImpressaoStudioV37()}</head><body><button class="no-print" onclick="window.print()">Imprimir / Salvar PDF</button><div class="brand"><div><div class="sub">STUDIO FB · GESTÃO FINANCEIRA</div><h1>${titulo}</h1></div><div class="periodo">${MESES_NOMES[finMes]} ${finAno}${marco}</div></div><div class="kpis"><div class="kpi"><small>Receita</small><strong>${fmtValor(rec)}</strong></div><div class="kpi"><small>Despesas</small><strong>${fmtValor(desp)}</strong></div><div class="kpi"><small>Resultado</small><strong style="color:${res>=0?'#1b7f45':'#c62828'}">${moedaAssinadaV37(res)}</strong></div></div><div class="sec"><div class="sec-title">Receitas com origem rastreável</div><table><thead><tr><th>Origem / competência</th><th class="num">Valor</th></tr></thead><tbody>${lr||'<tr><td>Nenhuma receita.</td><td class="num">R$ 0,00</td></tr>'}<tr class="total"><td>Total de receitas</td><td class="num">${fmtValor(rec)}</td></tr></tbody></table></div><div class="sec"><div class="sec-title">${tituloDesp}</div><table><thead><tr><th>${cabecalhoDesp}</th><th class="num">Valor</th></tr></thead><tbody>${ld||'<tr><td>Nenhuma despesa.</td><td class="num">R$ 0,00</td></tr>'}<tr class="total"><td>Total de despesas</td><td class="num">${fmtValor(desp)}</td></tr></tbody></table></div><div class="foot"><span>Studio FB · Documento gerencial gerado pelo sistema · V37.8</span><span>${new Date().toLocaleString('pt-BR')}</span></div></body></html>`;
+  const html=`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Studio FB — ${titulo}</title>${estiloImpressaoStudioV37()}</head><body><button class="no-print" onclick="window.print()">Imprimir / Salvar PDF</button><div class="brand"><div><div class="sub">STUDIO FB · GESTÃO FINANCEIRA</div><h1>${titulo}</h1></div><div class="periodo">${MESES_NOMES[finMes]} ${finAno}${marco}</div></div><div class="kpis"><div class="kpi"><small>Receita</small><strong>${fmtValor(rec)}</strong></div><div class="kpi"><small>Despesas</small><strong>${fmtValor(desp)}</strong></div><div class="kpi"><small>Resultado</small><strong style="color:${res>=0?'#1b7f45':'#c62828'}">${moedaAssinadaV37(res)}</strong></div></div><div class="sec"><div class="sec-title">Receitas com origem rastreável</div><table><thead><tr><th>Origem / competência</th><th class="num">Valor</th></tr></thead><tbody>${lr||'<tr><td>Nenhuma receita.</td><td class="num">R$ 0,00</td></tr>'}<tr class="total"><td>Total de receitas</td><td class="num">${fmtValor(rec)}</td></tr></tbody></table></div><div class="sec"><div class="sec-title">${tituloDesp}</div><table><thead><tr><th>${cabecalhoDesp}</th><th class="num">Valor</th></tr></thead><tbody>${ld||'<tr><td>Nenhuma despesa.</td><td class="num">R$ 0,00</td></tr>'}<tr class="total"><td>Total de despesas</td><td class="num">${fmtValor(desp)}</td></tr></tbody></table></div><div class="foot"><span>Studio FB · Documento gerencial gerado pelo sistema · V37.9</span><span>${new Date().toLocaleString('pt-BR')}</span></div></body></html>`;
   const w=window.open('','_blank');if(!w)return mensagemSistemaV34('Libere pop-ups para imprimir.','Impressão bloqueada','alerta');w.document.write(html);w.document.close();
 };
 imprimirDRE=window.imprimirDREV35;
@@ -12718,3 +12718,341 @@ window.setView=setView;
 // (incluindo o pré-carregamento histórico da V37.7 quando aplicável).
 imprimirDRE=window.imprimirDREV35;
 window.imprimirDRE=window.imprimirDREV35;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// V37.9 — SINCRONIA ENTRE ESCRITURAÇÃO E BAIXAS DE DESPESAS
+// - IDs permanentes para despesas pontuais (o índice da lista deixa de ser identidade);
+// - múltiplas baixas/parciais para a mesma despesa;
+// - bloqueio de pagamento acima do valor da despesa;
+// - edição de valor preserva as baixas e exibe saldo pendente;
+// - exclusão da despesa permite arquivar suas baixas vinculadas;
+// - migração segura de refs legadas por descrição/categoria/competência;
+// - painel de auditoria com pagamentos órfãos e excesso/pendência por despesa.
+// ═══════════════════════════════════════════════════════════════════════════════
+const VERSAO_DESPESAS_V379='37.9';
+
+function idDespesaV379(){
+  if(globalThis.crypto?.randomUUID) return `dsp_${globalThis.crypto.randomUUID()}`;
+  return `dsp_${Date.now()}_${Math.random().toString(36).slice(2,10)}`;
+}
+function normalizaChaveDespV379(v){
+  return String(v||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toLowerCase().replace(/\s+/g,' ');
+}
+function competenciaV379(mes,ano){ return `${ano}-${String(Number(mes)+1).padStart(2,'0')}`; }
+function ativoPagamentoDespV379(m){ return m&&m.status!=='excluido'&&m.tipo==='pagamento_despesa_operacional'; }
+function pagamentosDespesaV379(ref){
+  return (caixaMovs||[])
+    .filter(m=>ativoPagamentoDespV379(m)&&String(m.despesaRef)===String(ref))
+    .sort((a,b)=>(dataLocal(a.data)?.getTime()||0)-(dataLocal(b.data)?.getTime()||0));
+}
+function totalPagamentosDespesaV379(ref){
+  return arredV32(pagamentosDespesaV379(ref).reduce((s,m)=>s+Number(m.valor||0),0));
+}
+
+async function garantirIdsDespesasV379(mes,ano){
+  mes=Number(mes);ano=Number(ano);
+  if(typeof ehMesHistoricoDespV377==='function'&&ehMesHistoricoDespV377(mes,ano)) return loadDespesas(mes,ano);
+  const cats=await loadDespesas(mes,ano);
+  let alterou=false;
+  Object.values(cats||{}).forEach(lista=>(lista||[]).forEach(d=>{
+    // Programadas e pessoal já possuem referências estáveis próprias.
+    if(d?.fixo||d?.progId||d?.__pessoalV20||d?.id) return;
+    d.id=idDespesaV379();
+    alterou=true;
+  }));
+  if(alterou) await saveDespesas(mes,ano,cats);
+  return cats;
+}
+window.garantirIdsDespesasV379=garantirIdsDespesasV379;
+
+async function migrarRefsLegadasDespesasV379(mes,ano){
+  mes=Number(mes);ano=Number(ano);
+  if(typeof ehMesHistoricoDespV377==='function'&&ehMesHistoricoDespV377(mes,ano)) return {migrados:0};
+  await carregarMovCaixa();
+  await garantirIdsDespesasV379(mes,ano);
+  const itens=await itensDespV32(mes,ano);
+  const refsAtuais=new Set(itens.map(i=>String(i.ref)));
+  const comp=competenciaV379(mes,ano);
+  const porChave=new Map();
+  itens.forEach(i=>{
+    const chave=`${normalizaChaveDespV379(i.descricao)}|${String(i.cat||'')}|${i.competencia}`;
+    const arr=porChave.get(chave)||[];arr.push(i);porChave.set(chave,arr);
+  });
+  let migrados=0;
+  const candidatos=(caixaMovs||[]).filter(m=>ativoPagamentoDespV379(m)&&String(m.competencia||'')===comp);
+  for(const m of candidatos){
+    if(refsAtuais.has(String(m.despesaRef))) continue;
+    const chave=`${normalizaChaveDespV379(m.descricao)}|${String(m.cat||'')}|${String(m.competencia||'')}`;
+    let alvo=(porChave.get(chave)||[]);
+    // Compatibilidade com registros antigos sem categoria.
+    if(alvo.length!==1){
+      alvo=itens.filter(i=>normalizaChaveDespV379(i.descricao)===normalizaChaveDespV379(m.descricao)&&i.competencia===String(m.competencia||''));
+    }
+    if(alvo.length===1){
+      const i=alvo[0];
+      await salvarMovCaixa({...m,despesaRefLegado:m.despesaRef||'',despesaRef:i.ref,descricao:i.descricao,cat:i.cat,atualizadoEm:new Date().toISOString(),migradoV379:true});
+      migrados++;
+    }
+  }
+  return {migrados};
+}
+window.migrarRefsLegadasDespesasV379=migrarRefsLegadasDespesasV379;
+
+async function prepararDespesasV379(mes,ano){
+  await garantirIdsDespesasV379(mes,ano);
+  return migrarRefsLegadasDespesasV379(mes,ano);
+}
+window.prepararDespesasV379=prepararDespesasV379;
+
+// Compatibilidade: onde versões antigas esperam uma única baixa, devolvemos um
+// resumo agregado. A fonte de verdade continua sendo a lista de movimentos.
+movDespV32=function(ref){
+  const ps=pagamentosDespesaV379(ref);
+  if(!ps.length) return null;
+  const ultimo=ps[ps.length-1];
+  return {...ultimo,valor:arredV32(ps.reduce((s,m)=>s+Number(m.valor||0),0)),pagamentos:ps,__agregadoV379:true};
+};
+
+function contaPadraoBaixaV379(mov){
+  return mov?.contaCaixa||normalizarContaCaixaV37(mov?.conta||'',mov?.forma||'')||'infinite_corrente';
+}
+function htmlListaPagamentosV379(ref,valorPadrao,competencia,descricao,cat){
+  const ps=pagamentosDespesaV379(ref);
+  if(!ps.length) return '<div style="font-size:12px;color:var(--texto-muted)">Nenhuma baixa registrada.</div>';
+  return ps.map(p=>`<div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--borda)">
+    <div style="flex:1"><strong>${fmtData(p.data)} · ${fmtValor(p.valor)}</strong><div style="font-size:11px;color:var(--texto-muted)">${esc(contaTesV37(p.contaCaixa||p.conta)?.instituicao||p.contaCaixa||p.conta||'Conta não informada')}${p.observacao?` · ${esc(p.observacao)}`:''}</div></div>
+    <button class="btn btn-ghost btn-sm" onclick='abrirBaixaDespesaV32(${JSON.stringify(ref)},${JSON.stringify(descricao)},${Number(valorPadrao)},${JSON.stringify(competencia)},${JSON.stringify(cat)},${JSON.stringify(p.id)})'>Editar</button>
+    <button class="btn btn-danger btn-sm" onclick='removerPagamentoDespesaV379(${JSON.stringify(p.id)},${JSON.stringify(ref)},${JSON.stringify(descricao)},${Number(valorPadrao)},${JSON.stringify(competencia)},${JSON.stringify(cat)})'>Excluir</button>
+  </div>`).join('');
+}
+
+window.abrirBaixaDespesaV32=async function(ref,descricao,valorPadrao,competencia,cat='',editarId=''){
+  await carregarMovCaixa();
+  const ps=pagamentosDespesaV379(ref);
+  const edit=editarId?ps.find(p=>String(p.id)===String(editarId)):null;
+  const totalPago=arredV32(ps.reduce((s,p)=>s+Number(p.valor||0),0));
+  const restante=arredV32(Math.max(0,Number(valorPadrao||0)-totalPago));
+  const hoje=new Date().toISOString().split('T')[0];
+  const valorSugerido=edit?Number(edit.valor||0):restante;
+  const contaAtual=contaPadraoBaixaV379(edit);
+  const origemGerencial=edit?.destinacaoGerencial||'';
+  document.getElementById('modal-baixa-v32')?.remove();
+  const html=`<div class="overlay open" id="modal-baixa-v32" style="z-index:560"><div class="modal" style="max-width:620px"><div class="modal-header"><div><div class="modal-title">${edit?'Editar pagamento':'Gerenciar pagamentos'} da despesa</div><div style="font-size:12px;color:var(--texto-muted)">Competência ${esc(competencia)} · múltiplas baixas são permitidas.</div></div><button class="modal-close" onclick="document.getElementById('modal-baixa-v32').remove()">✕</button></div>
+  <div class="modal-body">
+    <div style="padding:10px 12px;background:#f9fafb;border:1px solid var(--borda);border-radius:8px;margin-bottom:14px"><strong>${esc(descricao)}</strong><div style="display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--texto-muted);margin-top:4px"><span>Despesa: <strong>${fmtValor(valorPadrao)}</strong></span><span>Pago: <strong>${fmtValor(totalPago)}</strong></span><span>Saldo: <strong style="color:${restante>0?'#b45309':'#166534'}">${fmtValor(restante)}</strong></span></div></div>
+    <div style="margin-bottom:14px"><div style="font-size:12px;font-weight:700;margin-bottom:4px">Pagamentos registrados</div>${htmlListaPagamentosV379(ref,valorPadrao,competencia,descricao,cat)}</div>
+    ${!edit&&restante<=0?'<div style="padding:10px 12px;background:#f0fdf4;border:1px solid #bbf7d0;color:#166534;border-radius:8px;font-size:12px">Esta despesa já está integralmente paga. Edite uma baixa existente se precisar corrigir.</div>':`<div class="form-grid" style="grid-template-columns:1fr 1fr"><div class="form-group"><label class="form-label">Data em que saiu do caixa</label><input class="form-input" type="date" id="bd-data" value="${esc(edit?.data||hoje)}"></div><div class="form-group"><label class="form-label">Valor desta baixa (R$)</label><input class="form-input" type="number" min="0.01" step="0.01" id="bd-valor" value="${Number(valorSugerido||0).toFixed(2)}"></div><div class="form-group"><label class="form-label">Conta física de saída</label><select class="form-select" id="bd-conta">${optionsContaFisicaV37(contaAtual)}</select><div class="form-hint">O saldo desta conta será reduzido na data informada.</div></div><div class="form-group"><label class="form-label">Caixinha / origem gerencial</label><select class="form-select" id="bd-origem-gerencial-v37">${optionsOrigemGerencialV37(origemGerencial)}</select></div><div class="form-group full"><label class="form-label">Observação</label><input class="form-input" id="bd-obs" value="${esc(edit?.observacao||'')}"></div></div>`}
+  </div><div class="modal-footer"><div style="flex:1"></div><button class="btn btn-ghost" onclick="document.getElementById('modal-baixa-v32').remove()">Fechar</button>${(!edit&&restante<=0)?'':`<button class="btn btn-primary" onclick='salvarPagamentoDespesaV379(${JSON.stringify(ref)},${Number(valorPadrao)},${JSON.stringify(competencia)},${JSON.stringify(descricao)},${JSON.stringify(cat)},${JSON.stringify(edit?.id||'')})'>${edit?'Salvar correção':'Adicionar pagamento'}</button>`}</div></div></div>`;
+  document.body.insertAdjacentHTML('beforeend',html);
+};
+
+window.salvarPagamentoDespesaV379=async function(ref,valorPadrao,competencia,descricao,cat,editarId=''){
+  await carregarMovCaixa();
+  const data=document.getElementById('bd-data')?.value;
+  const valor=arredV32(Number(document.getElementById('bd-valor')?.value||0));
+  if(!data||valor<=0){ return mensagemSistemaV34('Informe uma data e um valor de pagamento maior que zero.','Pagamento incompleto','alerta'); }
+  const ps=pagamentosDespesaV379(ref);
+  const outros=arredV32(ps.filter(p=>String(p.id)!==String(editarId||'')).reduce((s,p)=>s+Number(p.valor||0),0));
+  const novoTotal=arredV32(outros+valor);
+  if(novoTotal-Number(valorPadrao||0)>0.009){
+    return mensagemSistemaV34(`Esta baixa faria o total pago chegar a ${fmtValor(novoTotal)}, acima da despesa de ${fmtValor(valorPadrao)}. Máximo disponível para esta baixa: ${fmtValor(Math.max(0,Number(valorPadrao||0)-outros))}.`,'Pagamento acima da despesa','alerta');
+  }
+  const existente=editarId?ps.find(p=>String(p.id)===String(editarId)):null;
+  const id=existente?.id||`cx_desp_${hashV32(ref)}_${Date.now()}_${Math.random().toString(36).slice(2,7)}`;
+  const conta=document.getElementById('bd-conta')?.value||'';
+  const ger=document.getElementById('bd-origem-gerencial-v37')?.value||'';
+  const mov={...existente,id,tipo:'pagamento_despesa_operacional',despesaRef:ref,data,valor,competencia,descricao,cat,conta,contaCaixa:conta||normalizarContaCaixaV37('', '')||'infinite_corrente',destinacaoGerencial:ger,observacao:document.getElementById('bd-obs')?.value.trim()||'',status:'ativo',criadoEm:existente?.criadoEm||new Date().toISOString(),atualizadoEm:new Date().toISOString(),ts:existente?.ts||Date.now(),modeloBaixa:'multipla_v379'};
+  await salvarMovCaixa(mov);
+  toast(existente?'Pagamento corrigido ✓':'Pagamento adicionado ✓');
+  await window.abrirBaixaDespesaV32(ref,descricao,valorPadrao,competencia,cat,'');
+  if(viewAtual==='despesas') setTimeout(()=>renderDespesasView(),0);
+};
+// Alias legado: chamadas antigas passam a adicionar/editar de forma segura.
+window.salvarBaixaDespesaV32=async function(ref,valorPadrao,competencia,descricao,cat){
+  return window.salvarPagamentoDespesaV379(ref,valorPadrao,competencia,descricao,cat,'');
+};
+
+window.removerPagamentoDespesaV379=async function(id,ref,descricao,valorPadrao,competencia,cat){
+  await carregarMovCaixa();
+  const p=(caixaMovs||[]).find(m=>String(m.id)===String(id)&&ativoPagamentoDespV379(m));
+  if(!p) return;
+  const ok=typeof confirmarSistemaV34==='function'
+    ?await confirmarSistemaV34(`Excluir a baixa de ${fmtValor(p.valor)} em ${fmtData(p.data)}? A despesa continuará cadastrada e voltará a ficar parcial/pendente.`,'Excluir baixa','alerta','Excluir baixa')
+    :confirm('Excluir esta baixa?');
+  if(!ok)return;
+  await salvarMovCaixa({...p,status:'excluido',excluidoEm:new Date().toISOString(),atualizadoEm:new Date().toISOString()});
+  toast('Baixa excluída.');
+  await window.abrirBaixaDespesaV32(ref,descricao,valorPadrao,competencia,cat,'');
+  if(viewAtual==='despesas') setTimeout(()=>renderDespesasView(),0);
+};
+window.removerBaixaDespesaV32=async function(ref){
+  const ps=pagamentosDespesaV379(ref);
+  if(!ps.length)return;
+  if(ps.length===1){
+    const p=ps[0];
+    return window.removerPagamentoDespesaV379(p.id,ref,p.descricao||'Despesa',Number(p.valor||0),p.competencia||'',p.cat||'');
+  }
+  mensagemSistemaV34('Esta despesa possui mais de uma baixa. Use “Gerenciar pagamentos” e exclua/edite a baixa desejada.','Múltiplas baixas','info');
+};
+
+// Edição de despesa: nunca recria/duplica baixa. Se o novo valor ficar abaixo do
+// total já pago, exige corrigir as baixas antes.
+const salvarDespBaseV379=salvarDesp;
+salvarDesp=async function(){
+  const tipo=document.getElementById('df-tipo')?.value||'pontual';
+  const ehEdicao=despEditando&&despIdxAtual!==null;
+  if(!ehEdicao&&tipo!=='pontual') return salvarDespBaseV379();
+  const desc=document.getElementById('df-desc')?.value.trim()||'';
+  const valor=arredV32(Number(document.getElementById('df-valor')?.value||0));
+  despCatAtual=document.getElementById('df-cat')?.value||despCatAtual;
+  if(!desc){alert('Informe a descrição.');return;}
+  await prepararDespesasV379(despMes,despAno);
+  const cats=await loadDespesas(despMes,despAno);
+  if(ehEdicao){
+    const item=cats?.[despCatAtual]?.[despIdxAtual];if(!item)return;
+    if(!item.id&&!item.progId&&!item.__pessoalV20)item.id=idDespesaV379();
+    const ref=refDespV32(item,despCatAtual,despMes,despAno,despIdxAtual);
+    const pago=totalPagamentosDespesaV379(ref);
+    if(pago-valor>0.009){
+      return mensagemSistemaV34(`Já existem ${fmtValor(pago)} em baixas para esta despesa. O novo valor (${fmtValor(valor)}) ficaria abaixo do que já foi pago. Corrija/exclua as baixas primeiro.`,'Valor incompatível com as baixas','alerta');
+    }
+    item.valor=valor;
+    await saveDespesas(despMes,despAno,cats);
+    toast(pago>0&&pago<valor?`Despesa atualizada · ainda falta ${fmtValor(valor-pago)}`:'Despesa atualizada ✓');
+  }else{
+    cats[despCatAtual]=[...(cats[despCatAtual]||[]),{id:idDespesaV379(),desc,valor,tipo:'pontual'}];
+    await saveDespesas(despMes,despAno,cats);
+    toast('Despesa lançada ✓');
+  }
+  closeModalDesp();
+  await renderDespesasView();
+};
+window.salvarDesp=salvarDesp;
+
+// Exclusão de despesa: se houver baixa, arquiva as baixas apenas com confirmação.
+const excluirDespBaseV379=excluirDesp;
+excluirDesp=async function(cat,idx){
+  await prepararDespesasV379(despMes,despAno);
+  const cats=await loadDespesas(despMes,despAno);
+  const item=cats?.[cat]?.[idx];if(!item)return;
+  // Programadas/pessoal mantêm o fluxo próprio quando aplicável.
+  const ref=refDespV32(item,cat,despMes,despAno,idx);
+  const ps=pagamentosDespesaV379(ref);
+  let ok=false;
+  if(ps.length){
+    const total=arredV32(ps.reduce((s,p)=>s+Number(p.valor||0),0));
+    ok=typeof confirmarSistemaV34==='function'
+      ?await confirmarSistemaV34(`Esta despesa possui ${ps.length} baixa(s), totalizando ${fmtValor(total)}. Ao remover a despesa, essas baixas também serão arquivadas para não permanecerem órfãs no Caixa realizado.`,'Remover despesa e baixas','perigo','Remover tudo')
+      :confirm('Remover a despesa e suas baixas?');
+  }else{
+    ok=typeof confirmarSistemaV34==='function'
+      ?await confirmarSistemaV34('Remover esta despesa?','Remover despesa','alerta','Remover')
+      :confirm('Remover esta despesa?');
+  }
+  if(!ok)return;
+  for(const p of ps) await salvarMovCaixa({...p,status:'excluido',excluidoEm:new Date().toISOString(),motivoExclusao:'despesa_excluida_v379',atualizadoEm:new Date().toISOString()});
+  cats[cat].splice(idx,1);
+  await saveDespesas(despMes,despAno,cats);
+  despCache[chaveDesp(despMes,despAno)]=null;
+  toast(ps.length?'Despesa e baixas arquivadas.':'Despesa removida.');
+  await renderDespesasView();
+};
+window.excluirDesp=excluirDesp;
+
+function badgeSituacaoDespV379(valor,pago){
+  const dif=arredV32(Number(valor||0)-Number(pago||0));
+  if(pago<=0) return '<span class="badge badge-pendente">Sem baixa</span>';
+  if(Math.abs(dif)<0.01) return '<span class="badge badge-pago">Pago</span>';
+  if(dif>0) return `<span class="badge" style="background:#fffbeb;color:#92400e">Parcial · falta ${fmtValor(dif)}</span>`;
+  return `<span class="badge" style="background:#fef2f2;color:#b91c1c">Excesso · ${fmtValor(Math.abs(dif))}</span>`;
+}
+function htmlPagamentosResumoV379(ps){
+  if(!ps.length)return '<span style="font-size:11px;color:var(--texto-muted)">Nenhum pagamento</span>';
+  return ps.map(p=>`<div style="font-size:11px;color:var(--texto-muted);margin-top:3px">${fmtData(p.data)} · <strong>${fmtValor(p.valor)}</strong>${p.contaCaixa||p.conta?` · ${esc(contaTesV37(p.contaCaixa||p.conta)?.instituicao||p.contaCaixa||p.conta)}`:''}</div>`).join('');
+}
+
+const inserirConciliacaoDespBaseV379=inserirConciliacaoDespV377;
+inserirConciliacaoDespV377=async function(){
+  const historico=typeof ehMesHistoricoDespV377==='function'&&ehMesHistoricoDespV377(despMes,despAno);
+  if(historico) return inserirConciliacaoDespBaseV379();
+  const cont=document.getElementById('content');if(!cont)return;
+  document.getElementById('conciliacao-v32')?.remove();
+  document.getElementById('conciliacao-v376')?.remove();
+  document.getElementById('conciliacao-v377')?.remove();
+  document.getElementById('conciliacao-v379')?.remove();
+  await prepararDespesasV379(despMes,despAno);
+  const itens=await itensDespV32(despMes,despAno);
+  const refs=new Set(itens.map(i=>String(i.ref)));
+  let totalCompetencia=0,totalPago=0,qtdQuitadas=0,qtdExcesso=0;
+  const rows=itens.map(i=>{
+    const ps=pagamentosDespesaV379(i.ref),pago=arredV32(ps.reduce((s,p)=>s+Number(p.valor||0),0));
+    totalCompetencia+=Number(i.valor||0);totalPago+=pago;
+    if(Math.abs(pago-Number(i.valor||0))<0.01)qtdQuitadas++;
+    if(pago-Number(i.valor||0)>0.009)qtdExcesso++;
+    return `<tr><td><strong>${esc(i.descricao)}</strong><div style="font-size:11px;color:var(--texto-muted)">${esc(catLabelV32(i.cat))}<br><span style="color:#9ca3af">ID ${esc(String(i.ref))}</span></div></td><td style="font-weight:700">${fmtValor(i.valor)}</td><td>${badgeSituacaoDespV379(i.valor,pago)}${htmlPagamentosResumoV379(ps)}</td><td style="text-align:right"><button class="btn ${ps.length?'btn-ghost':'btn-success'} btn-sm" onclick='abrirBaixaDespesaV32(${JSON.stringify(i.ref)},${JSON.stringify(i.descricao)},${Number(i.valor)},${JSON.stringify(i.competencia)},${JSON.stringify(i.cat)})'>${ps.length?'💳 Gerenciar baixas':'💵 Confirmar pagamento'}</button></td></tr>`;
+  }).join('');
+  const orfaos=movDespesasMesV32(despMes,despAno).filter(m=>!refs.has(String(m.despesaRef)));
+  const orfaosHtml=orfaos.length?`<div style="margin:14px 16px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:10px 12px"><div style="font-weight:800;color:#991b1b;margin-bottom:6px">⚠ ${orfaos.length} baixa(s) órfã(s)</div><div style="font-size:11.5px;color:#7f1d1d;margin-bottom:8px">São pagamentos ativos sem uma despesa atual correspondente. Eles continuam afetando o Caixa até serem revisados.</div>${orfaos.map(m=>`<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-top:1px solid #fecaca"><div style="flex:1"><strong>${esc(m.descricao||'Despesa')}</strong> · ${fmtValor(m.valor)}<div style="font-size:11px">${fmtData(m.data)} · ref ${esc(String(m.despesaRef||'—'))}</div></div><button class="btn btn-danger btn-sm" onclick='arquivarBaixaOrfaV379(${JSON.stringify(m.id)})'>Cancelar baixa órfã</button></div>`).join('')}</div>`:'';
+  const alertaExcesso=qtdExcesso?`<div style="margin:12px 16px 0;background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;border-radius:8px;padding:9px 11px;font-size:11.5px"><strong>Atenção:</strong> ${qtdExcesso} despesa(s) têm pagamentos acima do valor cadastrado. Edite/exclua as baixas antes do fechamento.</div>`:'';
+  cont.insertAdjacentHTML('beforeend',`<div class="section-box" id="conciliacao-v379" style="margin-top:20px"><div class="section-header"><div><div class="section-title">Conciliação Manual das Despesas · V37.9</div><div style="font-size:12px;color:var(--texto-muted)">Uma despesa pode ter várias baixas. A soma das baixas nunca pode ultrapassar o valor da escrituração.</div></div><div style="font-size:12px;text-align:right"><strong>${qtdQuitadas}/${itens.length}</strong> quitadas<br><span style="color:var(--texto-muted)">Escriturado ${fmtValor(totalCompetencia)} · baixado ${fmtValor(totalPago)}</span></div></div>${alertaExcesso}${orfaosHtml}<div class="table-wrap"><table><thead><tr><th>Despesa</th><th>Escrituração</th><th>Baixas</th><th></th></tr></thead><tbody>${rows||'<tr><td colspan="4"><div class="empty">Nenhuma despesa com valor neste mês.</div></td></tr>'}</tbody></table></div></div>`);
+};
+
+window.arquivarBaixaOrfaV379=async function(id){
+  await carregarMovCaixa();
+  const m=(caixaMovs||[]).find(x=>String(x.id)===String(id)&&ativoPagamentoDespV379(x));if(!m)return;
+  const ok=typeof confirmarSistemaV34==='function'
+    ?await confirmarSistemaV34(`Cancelar a baixa órfã “${m.descricao||'Despesa'}” de ${fmtValor(m.valor)}? Ela deixará de compor o Caixa realizado.`,'Cancelar baixa órfã','perigo','Cancelar baixa')
+    :confirm('Cancelar esta baixa órfã?');
+  if(!ok)return;
+  await salvarMovCaixa({...m,status:'excluido',excluidoEm:new Date().toISOString(),motivoExclusao:'baixa_orfa_revisada_v379',atualizadoEm:new Date().toISOString()});
+  toast('Baixa órfã cancelada.');
+  await renderDespesasView();
+};
+
+// Prepara IDs/ref antes de montar a tela de despesas.
+const renderDespesasBaseV379=renderDespesasView;
+renderDespesasView=async function(){
+  if(!(typeof ehMesHistoricoDespV377==='function'&&ehMesHistoricoDespV377(despMes,despAno))) await prepararDespesasV379(despMes,despAno);
+  return renderDespesasBaseV379();
+};
+window.renderDespesasView=renderDespesasView;
+
+// Financeiro/relatório também executam a migração de referências legadas antes
+// de ler o caixa, sem alterar valores dos pagamentos.
+const renderFinanceiroBaseV379=renderFinanceiroView;
+renderFinanceiroView=async function(){
+  if(!(typeof ehMesHistoricoDespV377==='function'&&ehMesHistoricoDespV377(finMes,finAno))) await prepararDespesasV379(finMes,finAno);
+  return renderFinanceiroBaseV379();
+};
+window.renderFinanceiroView=renderFinanceiroView;
+
+const imprimirDREBaseV379=window.imprimirDREV35;
+window.imprimirDREV35=async function(){
+  if(!(typeof ehMesHistoricoDespV377==='function'&&ehMesHistoricoDespV377(finMes,finAno))) await prepararDespesasV379(finMes,finAno);
+  return imprimirDREBaseV379();
+};
+imprimirDRE=window.imprimirDREV35;
+window.imprimirDRE=window.imprimirDREV35;
+
+window.auditarSincroniaDespesasV379=async function(mes=despMes,ano=despAno){
+  mes=Number(mes);ano=Number(ano);
+  await prepararDespesasV379(mes,ano);
+  const itens=await itensDespV32(mes,ano);
+  const refs=new Set(itens.map(i=>String(i.ref)));
+  const linhas=itens.map(i=>{
+    const ps=pagamentosDespesaV379(i.ref),pago=arredV32(ps.reduce((s,p)=>s+Number(p.valor||0),0)),valor=arredV32(i.valor);
+    return {ref:i.ref,descricao:i.descricao,categoria:i.cat,valor,pago,saldo:arredV32(valor-pago),status:Math.abs(valor-pago)<0.01?'pago':pago>valor?'excesso':pago>0?'parcial':'pendente',pagamentos:ps.map(p=>({id:p.id,data:p.data,valor:p.valor,conta:p.contaCaixa||p.conta||''}))};
+  });
+  const orfaos=movDespesasMesV32(mes,ano).filter(m=>!refs.has(String(m.despesaRef))).map(m=>({id:m.id,descricao:m.descricao,valor:Number(m.valor||0),data:m.data,ref:m.despesaRef||''}));
+  return {versao:VERSAO_DESPESAS_V379,mes,ano,totalEscriturado:arredV32(linhas.reduce((s,l)=>s+l.valor,0)),totalBaixado:arredV32(movDespesasMesV32(mes,ano).reduce((s,m)=>s+Number(m.valor||0),0)),linhas,orfaos,temProblema:linhas.some(l=>l.status==='excesso')||orfaos.length>0};
+};
+
+const setViewBaseV379=setView;
+setView=function(v){
+  setViewBaseV379(v);
+  if(v==='caixa'||v==='financeiro'||v==='despesas'){
+    const top=document.getElementById('topbar-right');
+    if(top)top.innerHTML=`<span style="font-size:11px;color:var(--texto-muted);font-weight:700;letter-spacing:.6px">${v==='caixa'?'TESOURARIA':v==='financeiro'?'FINANCEIRO':'DESPESAS'} · V37.9</span>`;
+  }
+};
+window.setView=setView;
